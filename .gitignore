@@ -1,0 +1,45 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+dist-electron/
+out/
+release/
+build/
+.vite/
+.electron-builder/
+
+# Test and coverage output
+coverage/
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Local environment/config
+.env
+.env.*
+!.env.example
+*.local
+cameras.json
+go2rtc.yaml
+
+# TypeScript/Vite caches
+*.tsbuildinfo
+.turbo/
+
+# OS/editor noise
+.DS_Store
+Thumbs.db
+Desktop.ini
+.idea/
+.vscode/
+
+# Local Fjoscam runtime/debug files
+renderer.log
+go2rtc-bridge.log
+native-player.log
