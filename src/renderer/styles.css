@@ -33,17 +33,49 @@ button:disabled {
   display: grid;
   grid-template-columns: 280px minmax(0, 1fr);
   height: 100vh;
+  min-height: 0;
   background: #151717;
 }
 
 .sidebar {
   display: flex;
   flex-direction: column;
-  gap: 18px;
+  gap: 16px;
   min-width: 0;
+  min-height: 0;
+  overflow: hidden;
   padding: 20px 16px;
   background: #202222;
   border-right: 1px solid #313636;
+}
+
+.sidebar-zone {
+  min-height: 0;
+  overflow: hidden;
+}
+
+.camera-zone, .controls-zone {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.camera-zone {
+  flex: 0 1 auto;
+  max-height: 50%;
+}
+
+.controls-zone {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.controls-zone::-webkit-scrollbar, .camera-list::-webkit-scrollbar {
+  width: 0;
+  height: 0;
 }
 
 .brand {
@@ -75,11 +107,35 @@ button:disabled {
   background: #343838;
 }
 
+.edit-mode-banner {
+  padding: 8px 10px;
+  border: 1px solid #6f7f65;
+  border-radius: 6px;
+  color: #e7f0dc;
+  background: #3d4738;
+  font-weight: 700;
+}
+
 .camera-list {
   display: grid;
+  align-content: start;
   gap: 10px;
-  max-height: 34vh;
+  min-height: 0;
   overflow: auto;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.camera-row {
+  display: grid;
+  gap: 8px;
+}
+
+.camera-row.editing {
+  padding: 8px;
+  border: 1px dashed #596160;
+  border-radius: 8px;
+  background: #242828;
 }
 
 .camera-item {
@@ -91,6 +147,21 @@ button:disabled {
   border-radius: 8px;
   background: #333536;
   border: 1px solid transparent;
+}
+
+.camera-edit-actions {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.camera-edit-actions .icon-button {
+  width: 100%;
+}
+
+.danger-icon {
+  color: #ff9b9b;
+  background: #483232;
 }
 
 .camera-item.active {
@@ -113,12 +184,102 @@ button:disabled {
 
 .ptz-panel {
   display: grid;
-  gap: 14px;
-  margin-top: auto;
+  gap: 0;
   padding: 16px;
   border-radius: 8px;
   background: #292c2c;
   box-shadow: 0 18px 35px rgba(0, 0, 0, 0.22);
+}
+
+.device-panel {
+  display: grid;
+  gap: 0;
+  padding: 14px;
+  border-radius: 8px;
+  background: #252929;
+}
+
+.collapsible-panel.expanded {
+  gap: 12px;
+}
+
+.panel-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  width: 100%;
+  padding: 0;
+  text-align: left;
+  background: transparent;
+}
+
+.panel-toggle span {
+  font-weight: 750;
+  font-size: 18px;
+}
+
+.panel-toggle small {
+  color: #a8b1b0;
+}
+
+.panel-body {
+  display: grid;
+  gap: 14px;
+}
+
+.device-info {
+  display: grid;
+  gap: 4px;
+  color: #a8b1b0;
+  font-size: 13px;
+}
+
+.control-row {
+  display: grid;
+  gap: 6px;
+  font-weight: 700;
+}
+
+.control-row select {
+  width: 100%;
+}
+
+.wide-control {
+  width: 100%;
+  justify-content: center;
+}
+
+.light-controls {
+  display: grid;
+  gap: 10px;
+}
+
+.control-hint {
+  color: #a8b1b0;
+  line-height: 1.35;
+}
+
+.segmented-control {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+  padding: 4px;
+  border-radius: 8px;
+  background: #1d2222;
+}
+
+.segmented-control button {
+  justify-content: center;
+}
+
+.segmented-control button.selected {
+  background: #506448;
+}
+
+.danger-control {
+  color: #ffd6d6;
+  background: #4a3030;
 }
 
 .panel-heading span {

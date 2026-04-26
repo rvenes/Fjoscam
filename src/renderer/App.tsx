@@ -1,7 +1,7 @@
 import { FormEvent, MouseEvent, WheelEvent, useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import { ArrowDown, ArrowDownLeft, ArrowDownRight, ArrowLeft, ArrowRight, ArrowUp, ArrowUpLeft, ArrowUpRight, Camera, Crosshair, Eye, Focus, HelpCircle, Loader2, Pause, Play, Plus, Radio, RotateCcw, Settings, Trash2, WifiOff, ZoomIn, ZoomOut } from 'lucide-react';
-import type { AppState, CameraConfig, CameraInput, ConnectionStatus, Preset, PtzCommand, PtzDirection, StreamInfo } from '../shared/types';
+import { ArrowDown, ArrowDownLeft, ArrowDownRight, ArrowLeft, ArrowRight, ArrowUp, ArrowUpLeft, ArrowUpRight, Camera, Crosshair, Eye, Focus, Loader2, Pause, Play, Plus, Radio, RotateCcw, Trash2, WifiOff, ZoomIn, ZoomOut } from 'lucide-react';
+import type { AppState, CameraConfig, CameraInput, CameraProfile, ConnectionStatus, IrLightMode, Preset, PtzCommand, PtzDirection, StreamInfo, WhiteLedState } from '../shared/types';
 import { clickToPtzCommand } from '../shared/ptz';
 import './styles.css';
 
@@ -43,10 +43,16 @@ export default function App() {
   const [editingId, setEditingId] = useState<string | undefined>();
   const [showSettings, setShowSettings] = useState(false);
   const [showTips, setShowTips] = useState(false);
+  const [cameraEditMode, setCameraEditMode] = useState(false);
+  const [ptzExpanded, setPtzExpanded] = useState(false);
+  const [controlsExpanded, setControlsExpanded] = useState(false);
   const [speed, setSpeed] = useState(30);
   const [focusSpeed, setFocusSpeed] = useState(20);
   const [presets, setPresets] = useState<Preset[]>([]);
   const [streamInfo, setStreamInfo] = useState<{ high?: StreamInfo; low?: StreamInfo }>({});
+  const [profile, setProfile] = useState<CameraProfile | undefined>();
+  const [irMode, setIrMode] = useState<IrLightMode | undefined>();
+  const [whiteLed, setWhiteLed] = useState<WhiteLedState | undefined>();
   const [snapshotUrl, setSnapshotUrl] = useState('');
   const [fallbackUrl, setFallbackUrl] = useState('');
   const [isStreamEnabled, setIsStreamEnabled] = useState(true);
@@ -79,6 +85,19 @@ export default function App() {
 
   useEffect(() => {
     void refresh();
+    const removeOpenPanelListener = window.fjoscam.onOpenPanel((panel) => {
+      if (panel === 'settings') {
+        setShowSettings(true);
+        setShowTips(false);
+        return;
+      }
+      setShowTips((value) => !value);
+    });
+    const removeCameraEditListener = window.fjoscam.onCameraEditMode((enabled) => setCameraEditMode(enabled));
+    return () => {
+      removeOpenPanelListener();
+      removeCameraEditListener();
+    };
   }, []);
 
   useEffect(() => {
@@ -136,12 +155,16 @@ export default function App() {
     if (!activeCamera) {
       setPresets([]);
       setStreamInfo({});
+      setProfile(undefined);
+      setIrMode(undefined);
+      setWhiteLed(undefined);
       setSnapshotUrl('');
       setFallbackUrl('');
       setStatus(null);
       setMessage('');
       return;
     }
+    void loadCameraProfile(activeCamera.id);
     if (!isStreamEnabled) {
       clearCurrentStream();
       setMessage('Disconnected');
@@ -150,6 +173,14 @@ export default function App() {
     }
     void loadWebRtcRuntime(activeCamera.id);
   }, [activeCamera?.id, activeCamera?.streamChannel, activeCamera?.lowLatency, isStreamEnabled]);
+
+  async function loadCameraProfile(id: string) {
+    const nextProfile = await window.fjoscam.getProfile(id);
+    setProfile(nextProfile);
+    if (nextProfile?.capabilities.irLights) setIrMode(await window.fjoscam.getIrLights(id));
+    else setIrMode(undefined);
+    setWhiteLed(await window.fjoscam.getWhiteLed(id));
+  }
 
   async function refresh() {
     setState(await window.fjoscam.getState());
@@ -265,7 +296,69 @@ export default function App() {
   }
 
   async function removeCamera(id: string) {
+    const camera = state.cameras.find((item) => item.id === id);
+    const name = camera?.name ?? 'this camera';
+    const confirmed = window.confirm(`Delete camera "${name}" from Fjoscam?\n\nThis only removes it from Fjoscam. The camera itself is not changed.`);
+    if (!confirmed) return;
     setState(await window.fjoscam.removeCamera(id));
+    setMessage(`Deleted ${name}`);
+  }
+
+  async function moveCamera(id: string, direction: -1 | 1) {
+    const index = state.cameras.findIndex((camera) => camera.id === id);
+    const targetIndex = index + direction;
+    if (index < 0 || targetIndex < 0 || targetIndex >= state.cameras.length) return;
+    const nextCameras = [...state.cameras];
+    [nextCameras[index], nextCameras[targetIndex]] = [nextCameras[targetIndex], nextCameras[index]];
+    setState(await window.fjoscam.reorderCameras(nextCameras.map((camera) => camera.id)));
+  }
+
+  async function changeIrMode(mode: IrLightMode) {
+    if (!activeCamera) return;
+    setMessage('Updating IR lights...');
+    try {
+      await window.fjoscam.setIrLights(activeCamera.id, mode);
+      setIrMode(mode);
+      setMessage('IR lights updated');
+    } catch (error) {
+      setMessage(errorMessage(error));
+    }
+  }
+
+  async function setCameraLight(enabled: boolean, brightness = whiteLed?.brightness) {
+    if (!activeCamera) return;
+    setMessage('Updating spotlight...');
+    try {
+      await window.fjoscam.setWhiteLed(activeCamera.id, enabled, brightness);
+      setWhiteLed({ ...whiteLed, enabled, brightness });
+      setMessage(enabled ? 'Spotlight on' : 'Spotlight off');
+    } catch (error) {
+      setMessage(errorMessage(error));
+    }
+  }
+
+  async function setCameraLightBrightness(brightness: number) {
+    if (!activeCamera) return;
+    setWhiteLed({ ...whiteLed, enabled: true, brightness, supportsBrightness: true });
+    try {
+      await window.fjoscam.setWhiteLed(activeCamera.id, true, brightness);
+      setMessage(`Spotlight brightness ${brightness}%`);
+    } catch (error) {
+      setMessage(errorMessage(error));
+    }
+  }
+
+  async function playSiren() {
+    if (!activeCamera) return;
+    const confirmed = window.confirm(`Play siren on "${activeCamera.name}"?`);
+    if (!confirmed) return;
+    setMessage('Playing siren...');
+    try {
+      await window.fjoscam.playSiren(activeCamera.id);
+      setMessage('Siren command sent');
+    } catch (error) {
+      setMessage(errorMessage(error));
+    }
   }
 
   async function fetchCameraName() {
@@ -520,93 +613,179 @@ export default function App() {
           <span>Fjoscam</span>
         </div>
 
-        <div className="section-title">
-          <span>Kamera</span>
-          <button className="icon-button" title="Add camera" onClick={() => setShowSettings(true)}>
-            <Plus size={18} />
-          </button>
-        </div>
-
-        <div className="camera-list">
-          {state.cameras.map((camera) => (
-            <button
-              className={`camera-item ${camera.id === state.activeCameraId ? 'active' : ''}`}
-              key={camera.id}
-              onClick={() => void selectCamera(camera.id)}
-            >
-              <span className="camera-name">{camera.name}</span>
-              <span className="camera-host">{camera.host}</span>
+        <section className="sidebar-zone camera-zone">
+          <div className="section-title">
+            <span>Kamera</span>
+            <button className="icon-button" title="Add camera" onClick={() => setShowSettings(true)}>
+              <Plus size={18} />
             </button>
-          ))}
-          {state.cameras.length === 0 && <p className="empty">Legg til eit Reolink-kamera på LAN.</p>}
-        </div>
-
-        <div className="ptz-panel">
-          <div className="panel-heading">
-            <span>PTZ</span>
-            <small>{activeCamera?.name ?? 'Ingen kamera'}</small>
           </div>
+          {cameraEditMode && <div className="edit-mode-banner">Camera edit mode</div>}
 
-          <div className="ptz-grid">
-            {directions.map(({ direction, Icon, className }) => (
-              <button
-                key={direction}
-                className={`ptz-button ${className}`}
-                title={direction}
-                disabled={!activeCamera}
-                onMouseDown={() => void send({ kind: 'move', direction, speed })}
-                onMouseUp={() => void send({ kind: 'stop' })}
-                onMouseLeave={() => void send({ kind: 'stop' })}
-              >
-                <Icon size={20} />
-              </button>
+          <div className="camera-list">
+            {state.cameras.map((camera, index) => (
+              <div className={`camera-row ${cameraEditMode ? 'editing' : ''}`} key={camera.id}>
+                <button
+                  className={`camera-item ${camera.id === state.activeCameraId ? 'active' : ''}`}
+                  onClick={() => void selectCamera(camera.id)}
+                >
+                  <span className="camera-name">{camera.name}</span>
+                  <span className="camera-host">{camera.host}</span>
+                </button>
+                {cameraEditMode && (
+                  <div className="camera-edit-actions" aria-label={`Edit ${camera.name}`}>
+                    <button className="icon-button" title="Move up" disabled={index === 0} onClick={() => void moveCamera(camera.id, -1)}>
+                      <ArrowUp size={16} />
+                    </button>
+                    <button className="icon-button" title="Move down" disabled={index === state.cameras.length - 1} onClick={() => void moveCamera(camera.id, 1)}>
+                      <ArrowDown size={16} />
+                    </button>
+                    <button className="icon-button danger-icon" title="Delete camera" onClick={() => void removeCamera(camera.id)}>
+                      <Trash2 size={16} />
+                    </button>
+                  </div>
+                )}
+              </div>
             ))}
-            <button className="ptz-button center" title="Stop" disabled={!activeCamera} onClick={() => void send({ kind: 'stop' })}>
-              <Crosshair size={20} />
+            {state.cameras.length === 0 && <p className="empty">Legg til eit Reolink-kamera på LAN.</p>}
+          </div>
+        </section>
+
+        <section className="sidebar-zone controls-zone">
+          <div className={`ptz-panel collapsible-panel ${ptzExpanded ? 'expanded' : ''}`}>
+            <button className="panel-toggle" onClick={() => setPtzExpanded((value) => !value)}>
+              <span>PTZ</span>
+              <small>{ptzExpanded ? 'Hide' : `Speed ${speed}`}</small>
             </button>
+
+            {ptzExpanded && (
+              <div className="panel-body">
+                <div className="ptz-grid">
+                  {directions.map(({ direction, Icon, className }) => (
+                    <button
+                      key={direction}
+                      className={`ptz-button ${className}`}
+                      title={direction}
+                      disabled={!activeCamera}
+                      onMouseDown={() => void send({ kind: 'move', direction, speed })}
+                      onMouseUp={() => void send({ kind: 'stop' })}
+                      onMouseLeave={() => void send({ kind: 'stop' })}
+                    >
+                      <Icon size={20} />
+                    </button>
+                  ))}
+                  <button className="ptz-button center" title="Stop" disabled={!activeCamera} onClick={() => void send({ kind: 'stop' })}>
+                    <Crosshair size={20} />
+                  </button>
+                </div>
+
+                <label className="slider-label">
+                  <span>Speed</span>
+                  <strong>{speed}</strong>
+                  <input min="1" max="64" value={speed} type="range" onChange={(event) => setSpeed(Number(event.target.value))} />
+                </label>
+
+                <div className="quick-row">
+                  <button disabled={!activeCamera} onClick={() => void zoomStep('out')} title="Zoom out">
+                    <ZoomOut size={18} />
+                  </button>
+                  <button disabled={!activeCamera} onClick={() => void zoomStep('in')} title="Zoom in">
+                    <ZoomIn size={18} />
+                  </button>
+                  <button disabled={!activeCamera} onClick={() => void testCamera()} title="Refresh presets">
+                    {busy ? <Loader2 className="spin" size={18} /> : <RotateCcw size={18} />}
+                  </button>
+                </div>
+
+                <label className="slider-label">
+                  <span>Focus</span>
+                  <strong>{focusSpeed}</strong>
+                  <input
+                    min="1"
+                    max="64"
+                    value={focusSpeed}
+                    type="range"
+                    onChange={(event) => changeFocus(Number(event.target.value))}
+                    onMouseUp={stopFocus}
+                    onTouchEnd={stopFocus}
+                    onKeyUp={stopFocus}
+                  />
+                </label>
+                <div className="quick-row">
+                  <button disabled={!activeCamera} onClick={() => void send({ kind: 'focus', direction: 'near', speed: focusSpeed })} title="Focus near">
+                    <Focus size={18} />
+                  </button>
+                  <button disabled={!activeCamera} onClick={() => void send({ kind: 'focus', direction: 'far', speed: focusSpeed })} title="Focus far">
+                    <Eye size={18} />
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
 
-          <label className="slider-label">
-            <span>Speed</span>
-            <strong>{speed}</strong>
-            <input min="1" max="64" value={speed} type="range" onChange={(event) => setSpeed(Number(event.target.value))} />
-          </label>
+          {activeCamera && profile && (
+            <div className={`device-panel collapsible-panel ${controlsExpanded ? 'expanded' : ''}`}>
+              <button className="panel-toggle" onClick={() => setControlsExpanded((value) => !value)}>
+                <span>Controls</span>
+                <small>{controlsExpanded ? 'Hide' : profile.device?.model ?? 'Reolink'}</small>
+              </button>
 
-          <div className="quick-row">
-            <button disabled={!activeCamera} onClick={() => void zoomStep('out')} title="Zoom out">
-              <ZoomOut size={18} />
-            </button>
-            <button disabled={!activeCamera} onClick={() => void zoomStep('in')} title="Zoom in">
-              <ZoomIn size={18} />
-            </button>
-            <button disabled={!activeCamera} onClick={() => void testCamera()} title="Refresh presets">
-              {busy ? <Loader2 className="spin" size={18} /> : <RotateCcw size={18} />}
-            </button>
-          </div>
+              {controlsExpanded && (
+                <div className="panel-body">
 
-          <label className="slider-label">
-            <span>Focus</span>
-            <strong>{focusSpeed}</strong>
-            <input
-              min="1"
-              max="64"
-              value={focusSpeed}
-              type="range"
-              onChange={(event) => changeFocus(Number(event.target.value))}
-              onMouseUp={stopFocus}
-              onTouchEnd={stopFocus}
-              onKeyUp={stopFocus}
-            />
-          </label>
-          <div className="quick-row">
-            <button disabled={!activeCamera} onClick={() => void send({ kind: 'focus', direction: 'near', speed: focusSpeed })} title="Focus near">
-              <Focus size={18} />
-            </button>
-            <button disabled={!activeCamera} onClick={() => void send({ kind: 'focus', direction: 'far', speed: focusSpeed })} title="Focus far">
-              <Eye size={18} />
-            </button>
-          </div>
-        </div>
+            <div className="device-info">
+              {profile.device?.firmware && <span>FW {profile.device.firmware}</span>}
+              {profile.channels.length > 0 && <span>{profile.channels.filter((channel) => channel.online).length}/{profile.channels.length} channels online</span>}
+            </div>
+
+            {profile.capabilities.irLights && (
+              <label className="control-row">
+                <span>IR</span>
+                <select value={irMode ?? 'auto'} onChange={(event) => void changeIrMode(event.target.value as IrLightMode)}>
+                  <option value="auto">Auto</option>
+                  <option value="on">On</option>
+                  <option value="off">Off</option>
+                </select>
+              </label>
+            )}
+
+            {whiteLed && (
+              <div className="light-controls">
+                <div className="segmented-control">
+                  <button className={whiteLed.enabled ? 'selected' : ''} onClick={() => void setCameraLight(true)}>
+                    Light on
+                  </button>
+                  <button className={!whiteLed.enabled ? 'selected' : ''} onClick={() => void setCameraLight(false)}>
+                    Off
+                  </button>
+                </div>
+                {whiteLed.supportsBrightness && (
+                  <label className="slider-label">
+                    <span>Light</span>
+                    <strong>{whiteLed.brightness ?? 0}%</strong>
+                    <input
+                      min="0"
+                      max="100"
+                      value={whiteLed.brightness ?? 0}
+                      type="range"
+                      onChange={(event) => void setCameraLightBrightness(Number(event.target.value))}
+                    />
+                  </label>
+                )}
+                <small className="control-hint">Some cameras require an admin user to change the light.</small>
+              </div>
+            )}
+
+            {profile.capabilities.siren && (
+              <button className="wide-control danger-control" onClick={() => void playSiren()}>
+                Play siren
+              </button>
+            )}
+                </div>
+              )}
+            </div>
+          )}
+        </section>
       </aside>
 
       <section className="viewer">
@@ -643,14 +822,6 @@ export default function App() {
             </button>
             <button className="selected-action" disabled={!activeCamera}>
               WebRTC
-            </button>
-            <button onClick={() => setShowTips((value) => !value)}>
-              <HelpCircle size={18} />
-              Tips
-            </button>
-            <button onClick={() => setShowSettings(true)}>
-              <Settings size={18} />
-              Settings
             </button>
           </div>
         </header>
@@ -764,7 +935,6 @@ export default function App() {
               Prefer substream for lower latency
             </label>
             <div className="modal-actions">
-              {editingId && <button type="button" className="danger" onClick={() => void removeCamera(editingId)}><Trash2 size={18} /> Remove</button>}
               {activeCamera && <button type="button" onClick={() => editCamera(activeCamera)}>Edit active</button>}
               <button type="submit" disabled={busy}>{busy ? 'Saving...' : 'Save camera'}</button>
             </div>
@@ -833,16 +1003,24 @@ function numpadDirection(code: string): PtzDirection | null {
     case 'Numpad7':
       return 'LeftUp';
     case 'Numpad8':
+    case 'ArrowUp':
+    case 'KeyW':
       return 'Up';
     case 'Numpad9':
       return 'RightUp';
     case 'Numpad4':
+    case 'ArrowLeft':
+    case 'KeyA':
       return 'Left';
     case 'Numpad6':
+    case 'ArrowRight':
+    case 'KeyD':
       return 'Right';
     case 'Numpad1':
       return 'LeftDown';
     case 'Numpad2':
+    case 'ArrowDown':
+    case 'KeyS':
       return 'Down';
     case 'Numpad3':
       return 'RightDown';

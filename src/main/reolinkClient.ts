@@ -1,4 +1,17 @@
-import type { CameraWithSecret, ConnectionStatus, Preset, PtzCommand, StreamInfo } from '../shared/types.js';
+import type {
+  CameraCapabilities,
+  CameraChannelStatus,
+  CameraDeviceInfo,
+  CameraProfile,
+  CameraWithSecret,
+  ConnectionStatus,
+  IrLightMode,
+  Preset,
+  PtzCommand,
+  SirenConfig,
+  StreamInfo,
+  WhiteLedState,
+} from '../shared/types.js';
 import { commandToReolinkOp } from '../shared/ptz.js';
 import { requestBinary, requestJson } from './request.js';
 import { OnvifClient } from './onvifClient.js';
@@ -14,7 +27,23 @@ type DevInfoResponse = {
   DevInfo?: {
     name?: string;
     model?: string;
+    serial?: string;
+    uid?: string;
+    version?: string;
+    hardVer?: string;
   };
+};
+
+type AbilityResponse = {
+  Ability?: Record<string, unknown>;
+};
+
+type ChannelStatusResponse = {
+  ChannelStatus?: Array<{
+    channel?: number;
+    name?: string;
+    online?: number | boolean;
+  }>;
 };
 
 type EncResponse = {
@@ -41,6 +70,27 @@ type ZoomFocusResponse = {
   };
 };
 
+type IrLightsResponse = {
+  IrLights?: {
+    state?: string;
+    mode?: string;
+  };
+};
+
+type WhiteLedResponse = {
+  WhiteLed?: {
+    state?: number | string;
+    bright?: number;
+    brightness?: number;
+    Bright?: number;
+    mode?: string;
+  };
+};
+
+type AudioAlarmResponse = {
+  AudioAlarm?: SirenConfig;
+};
+
 export class ReolinkClient {
   private readonly sessions = new Map<string, { token: string; expiresAt: number; camera: CameraWithSecret }>();
   private readonly pendingLogins = new Map<string, Promise<string>>();
@@ -55,6 +105,7 @@ export class ReolinkClient {
         this.getCameraName(camera, token).catch(() => undefined),
         this.getStreamInfo(camera, token).catch(() => undefined),
       ]);
+      const profile = await this.getProfile(camera, token).catch(() => undefined);
       return {
         ok: true,
         message: 'Connected',
@@ -62,6 +113,7 @@ export class ReolinkClient {
         streamUrl: buildRtspUrl(camera),
         cameraName,
         streams,
+        profile,
       };
     } catch (error) {
       return {
@@ -86,6 +138,35 @@ export class ReolinkClient {
   }
 
   async getCameraName(camera: CameraWithSecret, token?: string): Promise<string | undefined> {
+    const info = await this.getDeviceInfo(camera, token);
+    return (info.name || info.model)?.trim() || undefined;
+  }
+
+  async getProfile(camera: CameraWithSecret, token?: string): Promise<CameraProfile> {
+    const sessionToken = token ?? (await this.getToken(camera));
+    const [ability, device, channels] = await Promise.all([
+      this.getAbility(camera, sessionToken).catch(() => ({})),
+      this.getDeviceInfo(camera, sessionToken).catch(() => ({})),
+      this.getChannelStatus(camera, sessionToken).catch(() => []),
+    ]);
+    return {
+      device,
+      channels,
+      capabilities: normalizeCapabilities(ability),
+    };
+  }
+
+  async getAbility(camera: CameraWithSecret, token?: string): Promise<Record<string, unknown>> {
+    const sessionToken = token ?? (await this.getToken(camera));
+    const response = await this.postWithTokenRetry<AbilityResponse>(
+      camera,
+      [{ cmd: 'GetAbility', action: 0, param: { User: { userName: camera.username } } }],
+      sessionToken,
+    );
+    return response[0]?.value?.Ability ?? {};
+  }
+
+  async getDeviceInfo(camera: CameraWithSecret, token?: string): Promise<CameraDeviceInfo> {
     const sessionToken = token ?? (await this.getToken(camera));
     const response = await this.postWithTokenRetry<DevInfoResponse>(
       camera,
@@ -93,7 +174,27 @@ export class ReolinkClient {
       sessionToken,
     );
     const info = response[0]?.value?.DevInfo;
-    return (info?.name || info?.model)?.trim() || undefined;
+    return {
+      name: info?.name?.trim(),
+      model: info?.model?.trim(),
+      uid: (info?.uid || info?.serial)?.trim(),
+      firmware: info?.version?.trim(),
+      hardware: info?.hardVer?.trim(),
+    };
+  }
+
+  async getChannelStatus(camera: CameraWithSecret, token?: string): Promise<CameraChannelStatus[]> {
+    const sessionToken = token ?? (await this.getToken(camera));
+    const response = await this.postWithTokenRetry<ChannelStatusResponse>(
+      camera,
+      [{ cmd: 'GetChannelStatus', action: 0, param: {} }],
+      sessionToken,
+    );
+    return (response[0]?.value?.ChannelStatus ?? []).map((channel) => ({
+      channel: Number(channel.channel ?? 0),
+      online: channel.online === true || channel.online === 1,
+      name: channel.name?.trim(),
+    }));
   }
 
   async getStreamInfo(camera: CameraWithSecret, token?: string): Promise<{ high?: StreamInfo; low?: StreamInfo }> {
@@ -158,12 +259,94 @@ export class ReolinkClient {
     return requestBinary(url);
   }
 
+  async getIrLights(camera: CameraWithSecret): Promise<IrLightMode | undefined> {
+    const token = await this.getToken(camera);
+    const response = await this.postWithTokenRetry<IrLightsResponse>(
+      camera,
+      [{ cmd: 'GetIrLights', action: 0, param: { channel: camera.channel } }],
+      token,
+    );
+    return normalizeIrMode(response[0]?.value?.IrLights?.mode ?? response[0]?.value?.IrLights?.state);
+  }
+
+  async setIrLights(camera: CameraWithSecret, mode: IrLightMode): Promise<void> {
+    const token = await this.getToken(camera);
+    await this.postWithTokenRetry(
+      camera,
+      [{ cmd: 'SetIrLights', action: 0, param: { IrLights: { channel: camera.channel, mode: reolinkIrMode(mode) } } }],
+      token,
+    );
+  }
+
+  async getWhiteLed(camera: CameraWithSecret): Promise<WhiteLedState> {
+    const token = await this.getToken(camera);
+    const response = await this.postWithTokenRetry<WhiteLedResponse>(
+      camera,
+      [{ cmd: 'GetWhiteLed', action: 0, param: { channel: camera.channel } }],
+      token,
+    );
+    const value = response[0]?.value?.WhiteLed;
+    const brightness = value?.bright ?? value?.brightness ?? value?.Bright;
+    return {
+      enabled: value?.state === 1 || value?.state === 'On' || value?.state === 'on',
+      brightness,
+      mode: value?.mode,
+      supportsBrightness: typeof brightness === 'number',
+    };
+  }
+
+  async setWhiteLed(camera: CameraWithSecret, enabled: boolean, brightness?: number): Promise<void> {
+    const token = await this.getToken(camera);
+    const whiteLed: Record<string, unknown> = { channel: camera.channel, state: enabled ? 1 : 0 };
+    if (typeof brightness === 'number') whiteLed.bright = clampBrightness(brightness);
+    try {
+      await this.postWithTokenRetry(
+        camera,
+        [{ cmd: 'SetWhiteLed', action: 0, param: { WhiteLed: whiteLed } }],
+        token,
+      );
+    } catch (error) {
+      if (isAbilityError(error)) {
+        throw new Error('Kameraet nektar lysstyring for denne brukaren. Bruk ein admin-brukar for White LED/spotlight.');
+      }
+      throw error;
+    }
+  }
+
+  async getSirenConfig(camera: CameraWithSecret): Promise<SirenConfig> {
+    const token = await this.getToken(camera);
+    const response = await this.postWithTokenRetry<AudioAlarmResponse>(
+      camera,
+      [{ cmd: 'GetAudioAlarm', action: 0, param: { channel: camera.channel } }],
+      token,
+    );
+    return response[0]?.value?.AudioAlarm ?? {};
+  }
+
+  async playSiren(camera: CameraWithSecret): Promise<void> {
+    const token = await this.getToken(camera);
+    await this.postWithTokenRetry(camera, [{ cmd: 'AudioAlarmPlay', action: 0, param: { channel: camera.channel } }], token);
+  }
+
   async logoutAll(): Promise<void> {
     const sessions = [...this.sessions.values()];
     this.sessions.clear();
     this.pendingLogins.clear();
     await Promise.allSettled(
       sessions.map((session) =>
+        this.post(session.camera, [{ cmd: 'Logout', action: 0, param: {} }], session.token).catch(() => undefined),
+      ),
+    );
+  }
+
+  async logoutExcept(cameraId: string): Promise<void> {
+    const sessions = [...this.sessions.entries()].filter(([, session]) => session.camera.id !== cameraId);
+    for (const [key] of sessions) {
+      this.sessions.delete(key);
+      this.pendingLogins.delete(key);
+    }
+    await Promise.allSettled(
+      sessions.map(([, session]) =>
         this.post(session.camera, [{ cmd: 'Logout', action: 0, param: {} }], session.token).catch(() => undefined),
       ),
     );
@@ -300,6 +483,10 @@ function clampSpeed(speed: number): number {
   return Math.max(1, Math.min(64, Math.round(speed)));
 }
 
+function clampBrightness(brightness: number): number {
+  return Math.max(0, Math.min(100, Math.round(brightness)));
+}
+
 function zoomLevelPosition(level: 1 | 2 | 3 | 4): number {
   switch (level) {
     case 1:
@@ -356,6 +543,10 @@ function shouldFallbackToOnvif(error: unknown): boolean {
   );
 }
 
+function isAbilityError(error: unknown): boolean {
+  return error instanceof Error && /ability error|rspCode.*-26/i.test(error.message);
+}
+
 function normalizeStreamInfo(quality: 'high' | 'low', stream?: RawStreamInfo): StreamInfo | undefined {
   if (!stream) return undefined;
   const width = Number(stream.width ?? stream.size?.split('*')[0] ?? 0);
@@ -369,4 +560,51 @@ function normalizeStreamInfo(quality: 'high' | 'low', stream?: RawStreamInfo): S
     bitrateKbps: Number(stream.bitRate ?? 0),
     codec: stream.vType,
   };
+}
+
+function normalizeCapabilities(ability: Record<string, unknown>): CameraCapabilities {
+  const has = (...needles: string[]) => {
+    const keys = Object.keys(ability);
+    return needles.some((needle) => keys.some((key) => key.toLowerCase().includes(needle.toLowerCase()) && abilityFlag(ability[key])));
+  };
+  return {
+    ptz: has('ptz'),
+    presets: has('preset', 'ptz'),
+    zoomFocus: has('zoom', 'focus', 'ptz'),
+    irLights: has('ir'),
+    whiteLed: has('whiteled', 'white', 'led', 'light'),
+    siren: has('audioalarm', 'siren', 'alarm'),
+    motion: has('md', 'motion'),
+    ai: has('ai'),
+  };
+}
+
+function abilityFlag(value: unknown): boolean {
+  if (typeof value === 'boolean') return value;
+  if (typeof value === 'number') return value > 0;
+  if (typeof value === 'string') return value !== '0' && value.toLowerCase() !== 'false';
+  if (value && typeof value === 'object') {
+    return Object.values(value as Record<string, unknown>).some(abilityFlag);
+  }
+  return false;
+}
+
+function normalizeIrMode(value?: string): IrLightMode | undefined {
+  const normalized = value?.toLowerCase();
+  if (!normalized) return undefined;
+  if (normalized.includes('auto')) return 'auto';
+  if (normalized.includes('off') || normalized === '0') return 'off';
+  if (normalized.includes('on') || normalized === '1') return 'on';
+  return undefined;
+}
+
+function reolinkIrMode(mode: IrLightMode): string {
+  switch (mode) {
+    case 'auto':
+      return 'Auto';
+    case 'on':
+      return 'On';
+    case 'off':
+      return 'Off';
+  }
 }

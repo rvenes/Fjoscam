@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, shell } from 'electron';
+import { app, BrowserWindow, Menu, ipcMain, shell } from 'electron';
 import { appendFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { CameraStore } from './store.js';
@@ -54,12 +54,70 @@ async function createWindow(): Promise<void> {
 app.whenReady().then(async () => {
   await snapshots.start();
   registerIpc();
+  createMenu();
   await createWindow();
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) void createWindow();
   });
 });
+
+function createMenu(): void {
+  const openRendererPanel = (panel: 'settings' | 'tips'): void => {
+    const window = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0];
+    window?.webContents.send('app:open-panel', panel);
+  };
+  const setCameraEditMode = (enabled: boolean): void => {
+    const window = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0];
+    window?.webContents.send('app:camera-edit-mode', enabled);
+  };
+
+  const template: Electron.MenuItemConstructorOptions[] = [
+    {
+      label: 'File',
+      submenu: [
+        { label: 'Settings', accelerator: 'CmdOrCtrl+,', click: () => openRendererPanel('settings') },
+        { type: 'separator' },
+        { label: 'Edit Camera List', click: () => setCameraEditMode(true) },
+        { label: 'Exit Camera Edit Mode', click: () => setCameraEditMode(false) },
+        { type: 'separator' },
+        { role: 'quit' },
+      ],
+    },
+    {
+      label: 'Edit',
+      submenu: [
+        { role: 'undo' },
+        { role: 'redo' },
+        { type: 'separator' },
+        { role: 'cut' },
+        { role: 'copy' },
+        { role: 'paste' },
+        { role: 'selectAll' },
+      ],
+    },
+    {
+      label: 'View',
+      submenu: [
+        { role: 'reload' },
+        { role: 'forceReload' },
+        { role: 'toggleDevTools' },
+        { type: 'separator' },
+        { role: 'resetZoom' },
+        { role: 'zoomIn' },
+        { role: 'zoomOut' },
+        { type: 'separator' },
+        { role: 'togglefullscreen' },
+      ],
+    },
+    {
+      label: 'Help',
+      submenu: [{ label: 'Tips', accelerator: 'F1', click: () => openRendererPanel('tips') }],
+    },
+  ];
+
+  Menu.setApplicationMenu(Menu.buildFromTemplate(template));
+}
 
 app.on('before-quit', (event) => {
   if (isShuttingDown) return;
@@ -92,7 +150,12 @@ function registerIpc(): void {
     cameraCache.delete(id);
     return store.removeCamera(id);
   });
-  ipcMain.handle('camera:set-active', (_event, id: string) => store.setActiveCamera(id));
+  ipcMain.handle('camera:reorder', (_event, ids: string[]) => store.reorderCameras(ids));
+  ipcMain.handle('camera:set-active', async (_event, id: string) => {
+    const state = await store.setActiveCamera(id);
+    void reolink.logoutExcept(id);
+    return state;
+  });
   ipcMain.handle('camera:set-stream-channel', (_event, id: string, channel: number) => store.setStreamChannel(id, channel));
   ipcMain.handle('camera:set-stream-quality', (_event, id: string, lowLatency: boolean) => store.setStreamQuality(id, lowLatency));
 
@@ -109,6 +172,41 @@ function registerIpc(): void {
   ipcMain.handle('camera:get-stream-info', async (_event, id: string) => {
     const camera = await getCachedCamera(id);
     return reolink.getStreamInfo(camera).catch(() => ({}));
+  });
+
+  ipcMain.handle('camera:get-profile', async (_event, id: string) => {
+    const camera = await getCachedCamera(id);
+    return reolink.getProfile(camera).catch(() => undefined);
+  });
+
+  ipcMain.handle('camera:get-ir-lights', async (_event, id: string) => {
+    const camera = await getCachedCamera(id);
+    return reolink.getIrLights(camera).catch(() => undefined);
+  });
+
+  ipcMain.handle('camera:set-ir-lights', async (_event, id: string, mode: 'auto' | 'on' | 'off') => {
+    const camera = await getCachedCamera(id);
+    await reolink.setIrLights(camera, mode);
+  });
+
+  ipcMain.handle('camera:get-white-led', async (_event, id: string) => {
+    const camera = await getCachedCamera(id);
+    return reolink.getWhiteLed(camera).catch(() => undefined);
+  });
+
+  ipcMain.handle('camera:set-white-led', async (_event, id: string, enabled: boolean, brightness?: number) => {
+    const camera = await getCachedCamera(id);
+    await reolink.setWhiteLed(camera, enabled, brightness);
+  });
+
+  ipcMain.handle('camera:get-siren-config', async (_event, id: string) => {
+    const camera = await getCachedCamera(id);
+    return reolink.getSirenConfig(camera).catch(() => undefined);
+  });
+
+  ipcMain.handle('camera:play-siren', async (_event, id: string) => {
+    const camera = await getCachedCamera(id);
+    await reolink.playSiren(camera);
   });
 
   ipcMain.handle('camera:get-device-name', async (_event, input: CameraInput) =>

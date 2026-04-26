@@ -34,6 +34,51 @@ export type StreamInfo = {
   codec?: string;
 };
 
+export type CameraDeviceInfo = {
+  name?: string;
+  model?: string;
+  uid?: string;
+  firmware?: string;
+  hardware?: string;
+};
+
+export type CameraChannelStatus = {
+  channel: number;
+  online: boolean;
+  name?: string;
+};
+
+export type CameraCapabilities = {
+  ptz: boolean;
+  presets: boolean;
+  zoomFocus: boolean;
+  irLights: boolean;
+  whiteLed: boolean;
+  siren: boolean;
+  motion: boolean;
+  ai: boolean;
+};
+
+export type CameraProfile = {
+  device?: CameraDeviceInfo;
+  channels: CameraChannelStatus[];
+  capabilities: CameraCapabilities;
+};
+
+export type IrLightMode = 'auto' | 'on' | 'off';
+
+export type WhiteLedState = {
+  enabled: boolean;
+  brightness?: number;
+  mode?: string;
+  supportsBrightness?: boolean;
+};
+
+export type SirenConfig = {
+  enabled?: boolean;
+  duration?: number;
+};
+
 export type AppState = {
   cameras: CameraConfig[];
   activeCameraId: CameraId | null;
@@ -67,6 +112,7 @@ export type ConnectionStatus = {
     high?: StreamInfo;
     low?: StreamInfo;
   };
+  profile?: CameraProfile;
 };
 
 export type CameraWithSecret = CameraConfig & CameraSecret;

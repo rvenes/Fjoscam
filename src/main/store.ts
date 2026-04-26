@@ -67,6 +67,17 @@ export class CameraStore {
     return this.getState();
   }
 
+  async reorderCameras(ids: string[]): Promise<AppState> {
+    const data = await this.readData();
+    const camerasById = new Map(data.cameras.map((camera) => [camera.id, camera]));
+    if (ids.length !== data.cameras.length || ids.some((id) => !camerasById.has(id))) {
+      throw new Error('Camera order does not match saved cameras.');
+    }
+    data.cameras = ids.map((id) => camerasById.get(id)!);
+    await this.writeData(data);
+    return this.getState();
+  }
+
   async setActiveCamera(id: string): Promise<AppState> {
     const data = await this.readData();
     if (!data.cameras.some((camera) => camera.id === id)) throw new Error('Camera not found.');
