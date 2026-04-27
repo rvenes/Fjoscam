@@ -5,6 +5,7 @@ import { CameraStore } from './store.js';
 import { ReolinkClient } from './reolinkClient.js';
 import { SnapshotServer } from './snapshotServer.js';
 import { Go2RtcBridge } from './go2rtcBridge.js';
+import { AppUpdater } from './updater.js';
 import type { CameraInput, CameraWithSecret, PtzCommand } from '../shared/types.js';
 
 const isDev = process.env.VITE_DEV_SERVER_URL || !app.isPackaged;
@@ -12,6 +13,7 @@ const store = new CameraStore();
 const reolink = new ReolinkClient();
 const snapshots = new SnapshotServer(store, reolink);
 const go2rtc = new Go2RtcBridge(store);
+const updater = new AppUpdater();
 const cameraCache = new Map<string, CameraWithSecret>();
 let isShuttingDown = false;
 
@@ -71,6 +73,10 @@ function createMenu(): void {
     const window = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0];
     window?.webContents.send('app:camera-edit-mode', enabled);
   };
+  const openAbout = (): void => {
+    const window = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0];
+    window?.webContents.send('app:open-about', updater.getVersion());
+  };
 
   const template: Electron.MenuItemConstructorOptions[] = [
     {
@@ -112,7 +118,12 @@ function createMenu(): void {
     },
     {
       label: 'Help',
-      submenu: [{ label: 'Tips', accelerator: 'F1', click: () => openRendererPanel('tips') }],
+      submenu: [
+        { label: 'Check for updates', click: () => updater.checkForUpdates() },
+        { type: 'separator' },
+        { label: 'Tips', accelerator: 'F1', click: () => openRendererPanel('tips') },
+        { label: 'About Fjoscam', click: openAbout },
+      ],
     },
   ];
 
@@ -140,6 +151,14 @@ async function shutdown(): Promise<void> {
 
 function registerIpc(): void {
   ipcMain.handle('app:get-state', () => store.getState());
+  ipcMain.handle('app:get-version', () => updater.getVersion());
+  ipcMain.handle('app:check-for-updates', () => updater.checkForUpdates());
+  ipcMain.handle('app:download-update', () => updater.downloadUpdate());
+  ipcMain.handle('app:quit-and-install-update', () => updater.quitAndInstall());
+  ipcMain.handle('app:set-fullscreen', (event, enabled: boolean) => {
+    const window = BrowserWindow.fromWebContents(event.sender);
+    window?.setFullScreen(enabled);
+  });
 
   ipcMain.handle('camera:save', async (_event, input: CameraInput, id?: string) => {
     if (id) cameraCache.delete(id);

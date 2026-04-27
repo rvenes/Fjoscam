@@ -1,7 +1,7 @@
 import { FormEvent, MouseEvent, WheelEvent, useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { ArrowDown, ArrowDownLeft, ArrowDownRight, ArrowLeft, ArrowRight, ArrowUp, ArrowUpLeft, ArrowUpRight, Camera, Crosshair, Eye, Focus, Loader2, Pause, Play, Plus, Radio, RotateCcw, Trash2, WifiOff, ZoomIn, ZoomOut } from 'lucide-react';
-import type { AppState, CameraConfig, CameraInput, CameraProfile, ConnectionStatus, IrLightMode, Preset, PtzCommand, PtzDirection, StreamInfo, WhiteLedState } from '../shared/types';
+import type { AppState, CameraConfig, CameraInput, CameraProfile, ConnectionStatus, IrLightMode, Preset, PtzCommand, PtzDirection, StreamInfo, UpdateStatus, WhiteLedState } from '../shared/types';
 import { clickToPtzCommand } from '../shared/ptz';
 import './styles.css';
 
@@ -46,6 +46,11 @@ export default function App() {
   const [cameraEditMode, setCameraEditMode] = useState(false);
   const [ptzExpanded, setPtzExpanded] = useState(false);
   const [controlsExpanded, setControlsExpanded] = useState(false);
+  const [viewerFullscreen, setViewerFullscreen] = useState(false);
+  const [appVersion, setAppVersion] = useState('');
+  const [showAbout, setShowAbout] = useState(false);
+  const [updateStatus, setUpdateStatus] = useState<UpdateStatus | null>(null);
+  const [showUpdateDialog, setShowUpdateDialog] = useState(false);
   const [speed, setSpeed] = useState(30);
   const [focusSpeed, setFocusSpeed] = useState(20);
   const [presets, setPresets] = useState<Preset[]>([]);
@@ -85,6 +90,7 @@ export default function App() {
 
   useEffect(() => {
     void refresh();
+    void window.fjoscam.getVersion().then(setAppVersion);
     const removeOpenPanelListener = window.fjoscam.onOpenPanel((panel) => {
       if (panel === 'settings') {
         setShowSettings(true);
@@ -94,15 +100,54 @@ export default function App() {
       setShowTips((value) => !value);
     });
     const removeCameraEditListener = window.fjoscam.onCameraEditMode((enabled) => setCameraEditMode(enabled));
+    const removeUpdateListener = window.fjoscam.onUpdateStatus((nextStatus) => {
+      setUpdateStatus(nextStatus);
+      setShowUpdateDialog(true);
+    });
+    const removeAboutListener = window.fjoscam.onOpenAbout((version) => {
+      setAppVersion(version);
+      setShowAbout(true);
+    });
     return () => {
       removeOpenPanelListener();
       removeCameraEditListener();
+      removeUpdateListener();
+      removeAboutListener();
     };
   }, []);
 
   useEffect(() => {
     function handleKeyDown(event: KeyboardEvent) {
-      if (isEditableTarget(event.target) || !activeCamera) return;
+      if (isEditableTarget(event.target)) return;
+
+      if (event.code === 'F11' || event.code === 'Enter' || event.code === 'NumpadEnter') {
+        event.preventDefault();
+        if (!event.repeat) void setFullscreenMode(!viewerFullscreen);
+        return;
+      }
+
+      if (event.code === 'Escape' && viewerFullscreen) {
+        event.preventDefault();
+        if (!event.repeat) void setFullscreenMode(false);
+        return;
+      }
+
+      if (event.code === 'PageDown' || event.code === 'PageUp') {
+        event.preventDefault();
+        if (!event.repeat) void selectAdjacentCamera(event.code === 'PageUp' ? 1 : -1);
+        return;
+      }
+
+      if (!activeCamera) return;
+
+      const presetIndex = presetIndexFromKey(event.code);
+      if (presetIndex !== null) {
+        event.preventDefault();
+        const preset = presets[presetIndex];
+        if (!event.repeat && preset) void send({ kind: 'preset', presetId: preset.id });
+        return;
+      }
+
       const direction = numpadDirection(event.code);
 
       if (direction) {
@@ -129,10 +174,6 @@ export default function App() {
         return;
       }
 
-      if (event.code === 'NumpadEnter' || event.code === 'Enter') {
-        event.preventDefault();
-        if (!event.repeat && hasSecondaryLens) void toggleZoomChannel();
-      }
     }
 
     function handleKeyUp(event: KeyboardEvent) {
@@ -149,7 +190,7 @@ export default function App() {
       window.removeEventListener('keydown', handleKeyDown);
       window.removeEventListener('keyup', handleKeyUp);
     };
-  }, [activeCamera, hasSecondaryLens, speed]);
+  }, [activeCamera, presets, speed, state.cameras, viewerFullscreen]);
 
   useEffect(() => {
     if (!activeCamera) {
@@ -186,6 +227,31 @@ export default function App() {
     setState(await window.fjoscam.getState());
   }
 
+  async function setFullscreenMode(enabled: boolean) {
+    setViewerFullscreen(enabled);
+    await window.fjoscam.setFullscreen(enabled);
+  }
+
+  async function checkForUpdates() {
+    setShowUpdateDialog(true);
+    setUpdateStatus(await window.fjoscam.checkForUpdates());
+  }
+
+  async function downloadUpdate() {
+    setUpdateStatus(await window.fjoscam.downloadUpdate());
+  }
+
+  async function installUpdate() {
+    await window.fjoscam.quitAndInstallUpdate();
+  }
+
+  async function selectAdjacentCamera(direction: -1 | 1) {
+    if (state.cameras.length === 0) return;
+    const currentIndex = Math.max(0, state.cameras.findIndex((camera) => camera.id === state.activeCameraId));
+    const nextIndex = (currentIndex + direction + state.cameras.length) % state.cameras.length;
+    await selectCamera(state.cameras[nextIndex].id);
+  }
+
   async function loadWebRtcRuntime(id: string) {
     const loadId = runtimeLoadRef.current + 1;
     runtimeLoadRef.current = loadId;
@@ -194,6 +260,27 @@ export default function App() {
     try {
       setFallbackUrl('');
       setSnapshotUrl('');
+      const nextStreamInfo: { high?: StreamInfo; low?: StreamInfo } = await window.fjoscam.getStreamInfo(id).catch(() => ({}));
+      if (runtimeLoadRef.current !== loadId) return;
+      setStreamInfo(nextStreamInfo);
+
+      const camera = state.cameras.find((item) => item.id === id);
+      const selectedInfo = camera?.lowLatency ? nextStreamInfo.low : nextStreamInfo.high;
+      const lowStreamIsPlayable = nextStreamInfo.low && !isH265Stream(nextStreamInfo.low);
+      if (camera && !camera.lowLatency && isH265Stream(selectedInfo) && lowStreamIsPlayable) {
+        setMessage('High/Clear uses H265 here. Switching to Low/Fluent for WebRTC on this machine.');
+        const nextState = await window.fjoscam.setStreamQuality(id, true);
+        if (runtimeLoadRef.current !== loadId) return;
+        setState(nextState);
+        return;
+      }
+
+      if (isH265Stream(selectedInfo)) {
+        setMessage('This stream uses H265, and WebRTC on this machine cannot play it. Try changing the camera stream codec to H264 in Reolink.');
+        setStatus({ ok: false, message: 'H265 stream is not playable in WebRTC here' });
+        return;
+      }
+
       const webRtcStream = await window.fjoscam.getWebRtcStream(id);
       if (runtimeLoadRef.current !== loadId) return;
       setSnapshotUrl(webRtcStream.pageUrl);
@@ -201,10 +288,9 @@ export default function App() {
       setMessage('WebRTC live');
       setStatus({ ok: true, message: 'WebRTC live' });
 
-      const [nextPresets, nextFallbackUrl, nextStreamInfo] = await Promise.all([
+      const [nextPresets, nextFallbackUrl] = await Promise.all([
         window.fjoscam.getPresets(id).catch(() => []),
         window.fjoscam.getMjpegUrl(id).catch(() => ''),
-        window.fjoscam.getStreamInfo(id).catch(() => ({})),
       ]);
       if (runtimeLoadRef.current !== loadId) return;
       setPresets(nextPresets);
@@ -327,10 +413,11 @@ export default function App() {
 
   async function setCameraLight(enabled: boolean, brightness = whiteLed?.brightness) {
     if (!activeCamera) return;
+    const nextBrightness = enabled ? (brightness && brightness > 0 ? brightness : 85) : 0;
     setMessage('Updating spotlight...');
     try {
-      await window.fjoscam.setWhiteLed(activeCamera.id, enabled, brightness);
-      setWhiteLed({ ...whiteLed, enabled, brightness });
+      await window.fjoscam.setWhiteLed(activeCamera.id, enabled, nextBrightness);
+      setWhiteLed({ ...whiteLed, enabled, brightness: nextBrightness });
       setMessage(enabled ? 'Spotlight on' : 'Spotlight off');
     } catch (error) {
       setMessage(errorMessage(error));
@@ -339,9 +426,10 @@ export default function App() {
 
   async function setCameraLightBrightness(brightness: number) {
     if (!activeCamera) return;
-    setWhiteLed({ ...whiteLed, enabled: true, brightness, supportsBrightness: true });
+    const enabled = brightness > 0;
+    setWhiteLed({ ...whiteLed, enabled, brightness, supportsBrightness: true });
     try {
-      await window.fjoscam.setWhiteLed(activeCamera.id, true, brightness);
+      await window.fjoscam.setWhiteLed(activeCamera.id, enabled, brightness);
       setMessage(`Spotlight brightness ${brightness}%`);
     } catch (error) {
       setMessage(errorMessage(error));
@@ -606,7 +694,7 @@ export default function App() {
   }
 
   return (
-    <main className="shell">
+    <main className={`shell ${viewerFullscreen ? 'viewer-fullscreen' : ''}`}>
       <aside className="sidebar">
         <div className="brand">
           <Radio size={26} />
@@ -903,10 +991,57 @@ export default function App() {
 
       {showTips && (
         <div className="tips-popover">
-          <strong>Tips</strong>
+          <strong>Hjelp</strong>
+          <span><kbd>Enter</kbd> fullskjerm av/på.</span>
+          <span><kbd>Page Up</kbd> neste kamera. <kbd>Page Down</kbd> førre kamera.</span>
+          <span><kbd>←</kbd> <kbd>↑</kbd> <kbd>↓</kbd> <kbd>→</kbd>, <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> eller numpad styrer kamera.</span>
+          <span><kbd>1</kbd>-<kbd>9</kbd> går til lagra PTZ-posisjon 1-9. <kbd>0</kbd> går til posisjon 10.</span>
+          <span><kbd>+</kbd> og <kbd>-</kbd> justerer PT-farten.</span>
           <span>1x, 2x, 3x og 4x styrer optisk zoom når kameraet støttar det.</span>
-          <span>Hald museknappen inne i bildet for å flytte kameraet.</span>
-          <span>Numpad + og - justerer PT-farten.</span>
+          <button onClick={() => void checkForUpdates()}>Check for updates</button>
+        </div>
+      )}
+
+      {showAbout && (
+        <div className="modal-backdrop" onMouseDown={() => setShowAbout(false)}>
+          <div className="small-modal" onMouseDown={(event) => event.stopPropagation()}>
+            <div className="modal-heading">
+              <h2>About Fjoscam</h2>
+              <button type="button" className="icon-button" onClick={() => setShowAbout(false)}>
+                ×
+              </button>
+            </div>
+            <p>Fjoscam {appVersion || '1.0.0'}</p>
+            <p className="muted-text">Low-latency Reolink LAN viewer.</p>
+            <div className="modal-actions">
+              <button type="button" onClick={() => void checkForUpdates()}>Check for updates</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showUpdateDialog && updateStatus && (
+        <div className="modal-backdrop" onMouseDown={() => setShowUpdateDialog(false)}>
+          <div className="small-modal" onMouseDown={(event) => event.stopPropagation()}>
+            <div className="modal-heading">
+              <h2>Fjoscam update</h2>
+              <button type="button" className="icon-button" onClick={() => setShowUpdateDialog(false)}>
+                ×
+              </button>
+            </div>
+            <p>{updateMessage(updateStatus)}</p>
+            {updateStatus.state === 'downloading' && (
+              <progress className="update-progress" max="100" value={Math.round(updateStatus.percent ?? 0)} />
+            )}
+            <div className="modal-actions">
+              {updateStatus.state === 'available' && <button type="button" onClick={() => void downloadUpdate()}>Last ned</button>}
+              {updateStatus.state === 'downloaded' && <button type="button" onClick={() => void installUpdate()}>Installer og start på nytt</button>}
+              {['idle', 'not-available', 'error'].includes(updateStatus.state) && (
+                <button type="button" onClick={() => void checkForUpdates()}>Sjekk igjen</button>
+              )}
+              <button type="button" onClick={() => setShowUpdateDialog(false)}>Lukk</button>
+            </div>
+          </div>
         </div>
       )}
 
@@ -966,6 +1101,25 @@ function ClickZoneOverlay() {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function updateMessage(status: UpdateStatus): string {
+  switch (status.state) {
+    case 'idle':
+      return `Fjoscam ${status.currentVersion}`;
+    case 'checking':
+      return 'Sjekkar etter oppdatering...';
+    case 'available':
+      return `Ny versjon ${status.version} er klar. Du har ${status.currentVersion}.`;
+    case 'not-available':
+      return `Du har siste versjon (${status.currentVersion}).`;
+    case 'downloading':
+      return `Lastar ned ${status.version ?? 'oppdatering'}... ${Math.round(status.percent ?? 0)}%`;
+    case 'downloaded':
+      return `Versjon ${status.version} er lasta ned og klar til installasjon.`;
+    case 'error':
+      return status.message;
+  }
 }
 
 function clamp(value: number, min: number, max: number): number {
@@ -1029,6 +1183,12 @@ function numpadDirection(code: string): PtzDirection | null {
   }
 }
 
+function presetIndexFromKey(code: string): number | null {
+  if (/^Digit[1-9]$/.test(code)) return Number(code.slice(5)) - 1;
+  if (code === 'Digit0') return 9;
+  return null;
+}
+
 function isEditableTarget(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) return false;
   const tag = target.tagName.toLowerCase();
@@ -1049,6 +1209,10 @@ function formatStreamInfo(info?: StreamInfo): string {
     info.codec?.toUpperCase() ?? '',
   ].filter(Boolean);
   return parts.length ? ` · ${parts.join(' · ')}` : '';
+}
+
+function isH265Stream(info?: StreamInfo): boolean {
+  return /h\.?265|hevc/i.test(info?.codec ?? '');
 }
 
 createRoot(document.getElementById('root')!).render(<App />);

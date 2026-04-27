@@ -116,3 +116,12 @@ export type ConnectionStatus = {
 };
 
 export type CameraWithSecret = CameraConfig & CameraSecret;
+
+export type UpdateStatus =
+  | { state: 'idle'; currentVersion: string }
+  | { state: 'checking'; currentVersion: string }
+  | { state: 'available'; currentVersion: string; version: string; releaseDate?: string; releaseName?: string }
+  | { state: 'not-available'; currentVersion: string }
+  | { state: 'downloading'; currentVersion: string; version?: string; percent?: number; transferred?: number; total?: number }
+  | { state: 'downloaded'; currentVersion: string; version: string }
+  | { state: 'error'; currentVersion: string; message: string };

@@ -1,6 +1,6 @@
 {
   "name": "fjoscam",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Low-latency Reolink LAN viewer for lambing season monitoring.",
   "main": "dist-electron/main/main.js",
   "scripts": {
@@ -37,9 +37,16 @@
     },
     "win": {
       "target": "nsis"
-    }
+    },
+    "publish": [
+      {
+        "provider": "generic",
+        "url": "https://venes.org/fjoscam/"
+      }
+    ]
   },
   "dependencies": {
+    "electron-updater": "^6.8.3",
     "lucide-react": "^1.9.0",
     "react": "^19.2.5",
     "react-dom": "^19.2.5"

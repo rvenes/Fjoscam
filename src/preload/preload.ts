@@ -1,6 +1,18 @@
 import { contextBridge, ipcRenderer } from 'electron';
 import type { IpcRendererEvent } from 'electron';
-import type { AppState, CameraInput, CameraProfile, ConnectionStatus, IrLightMode, Preset, PtzCommand, SirenConfig, StreamInfo, WhiteLedState } from '../shared/types.js';
+import type {
+  AppState,
+  CameraInput,
+  CameraProfile,
+  ConnectionStatus,
+  IrLightMode,
+  Preset,
+  PtzCommand,
+  SirenConfig,
+  StreamInfo,
+  UpdateStatus,
+  WhiteLedState,
+} from '../shared/types.js';
 
 type WebRtcStream = {
   mode: 'webrtc';
@@ -12,6 +24,11 @@ type WebRtcStream = {
 
 const api = {
   getState: (): Promise<AppState> => ipcRenderer.invoke('app:get-state'),
+  getVersion: (): Promise<string> => ipcRenderer.invoke('app:get-version'),
+  checkForUpdates: (): Promise<UpdateStatus> => ipcRenderer.invoke('app:check-for-updates'),
+  downloadUpdate: (): Promise<UpdateStatus> => ipcRenderer.invoke('app:download-update'),
+  quitAndInstallUpdate: (): Promise<void> => ipcRenderer.invoke('app:quit-and-install-update'),
+  setFullscreen: (enabled: boolean): Promise<void> => ipcRenderer.invoke('app:set-fullscreen', enabled),
   saveCamera: (input: CameraInput, id?: string): Promise<AppState> => ipcRenderer.invoke('camera:save', input, id),
   removeCamera: (id: string): Promise<AppState> => ipcRenderer.invoke('camera:remove', id),
   reorderCameras: (ids: string[]): Promise<AppState> => ipcRenderer.invoke('camera:reorder', ids),
@@ -43,6 +60,16 @@ const api = {
     const listener = (_event: IpcRendererEvent, enabled: boolean) => callback(enabled);
     ipcRenderer.on('app:camera-edit-mode', listener);
     return () => ipcRenderer.removeListener('app:camera-edit-mode', listener);
+  },
+  onUpdateStatus: (callback: (status: UpdateStatus) => void): (() => void) => {
+    const listener = (_event: IpcRendererEvent, status: UpdateStatus) => callback(status);
+    ipcRenderer.on('app:update-status', listener);
+    return () => ipcRenderer.removeListener('app:update-status', listener);
+  },
+  onOpenAbout: (callback: (version: string) => void): (() => void) => {
+    const listener = (_event: IpcRendererEvent, version: string) => callback(version);
+    ipcRenderer.on('app:open-about', listener);
+    return () => ipcRenderer.removeListener('app:open-about', listener);
   },
 };
 

@@ -288,7 +288,7 @@ export class ReolinkClient {
     const value = response[0]?.value?.WhiteLed;
     const brightness = value?.bright ?? value?.brightness ?? value?.Bright;
     return {
-      enabled: value?.state === 1 || value?.state === 'On' || value?.state === 'on',
+      enabled: (value?.state === 1 || value?.state === 'On' || value?.state === 'on') && brightness !== 0,
       brightness,
       mode: value?.mode,
       supportsBrightness: typeof brightness === 'number',
@@ -297,8 +297,8 @@ export class ReolinkClient {
 
   async setWhiteLed(camera: CameraWithSecret, enabled: boolean, brightness?: number): Promise<void> {
     const token = await this.getToken(camera);
-    const whiteLed: Record<string, unknown> = { channel: camera.channel, state: enabled ? 1 : 0 };
-    if (typeof brightness === 'number') whiteLed.bright = clampBrightness(brightness);
+    const nextBrightness = enabled ? clampBrightness(brightness ?? 85) : 0;
+    const whiteLed: Record<string, unknown> = { channel: camera.channel, state: enabled ? 1 : 0, bright: nextBrightness };
     try {
       await this.postWithTokenRetry(
         camera,
