@@ -33,6 +33,7 @@ export class CameraStore {
     const id = existingId ?? randomUUID();
     const camera: CameraConfig = {
       id,
+      kind: input.kind ?? 'reolink',
       name: input.name.trim(),
       host: normalizeHost(input.host),
       protocol: input.protocol,
@@ -42,6 +43,9 @@ export class CameraStore {
       channel: Number(input.channel),
       streamChannel: Number(input.streamChannel ?? input.channel),
       lowLatency: Boolean(input.lowLatency),
+      mjpegPath: input.mjpegPath?.trim() || undefined,
+      ptzPath: input.ptzPath?.trim() || undefined,
+      streamUrl: input.streamUrl?.trim() || undefined,
     };
 
     const index = data.cameras.findIndex((item) => item.id === id);
@@ -50,6 +54,8 @@ export class CameraStore {
 
     if (input.password) {
       data.secrets[id] = encryptSecret({ password: input.password });
+    } else if (camera.kind === 'generic') {
+      delete data.secrets[id];
     } else if (!data.secrets[id]) {
       throw new Error('Camera password is missing.');
     }
@@ -109,6 +115,7 @@ export class CameraStore {
     const camera = data.cameras.find((item) => item.id === id);
     if (!camera) throw new Error('Camera not found.');
     const encrypted = data.secrets[id];
+    if (!encrypted && camera.kind === 'generic') return { ...camera, password: '' };
     if (!encrypted) throw new Error('Camera password is missing.');
     return { ...camera, ...decryptSecret(encrypted) };
   }
@@ -119,7 +126,11 @@ export class CameraStore {
       const data = { ...defaultData, ...JSON.parse(contents) } as PersistedData;
       data.cameras = data.cameras.map((camera) => ({
         ...camera,
+        kind: camera.kind ?? 'reolink',
         streamChannel: camera.streamChannel ?? camera.channel ?? 0,
+        mjpegPath: camera.kind === 'panasonic' ? camera.mjpegPath ?? '/nphMotionJpeg?Resolution=640x480&Quality=Standard' : camera.mjpegPath,
+        ptzPath: camera.kind === 'panasonic' ? camera.ptzPath ?? '/nphControlCamera' : camera.ptzPath,
+        streamUrl: camera.streamUrl,
       }));
       return data;
     } catch {

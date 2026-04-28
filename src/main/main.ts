@@ -6,6 +6,8 @@ import { ReolinkClient } from './reolinkClient.js';
 import { SnapshotServer } from './snapshotServer.js';
 import { Go2RtcBridge } from './go2rtcBridge.js';
 import { AppUpdater } from './updater.js';
+import { discoverCameras } from './discovery.js';
+import { PanasonicClient } from './panasonicClient.js';
 import type { CameraInput, CameraWithSecret, PtzCommand } from '../shared/types.js';
 
 const isDev = process.env.VITE_DEV_SERVER_URL || !app.isPackaged;
@@ -14,6 +16,7 @@ const reolink = new ReolinkClient();
 const snapshots = new SnapshotServer(store, reolink);
 const go2rtc = new Go2RtcBridge(store);
 const updater = new AppUpdater();
+const panasonic = new PanasonicClient();
 const cameraCache = new Map<string, CameraWithSecret>();
 let isShuttingDown = false;
 
@@ -177,29 +180,38 @@ function registerIpc(): void {
   });
   ipcMain.handle('camera:set-stream-channel', (_event, id: string, channel: number) => store.setStreamChannel(id, channel));
   ipcMain.handle('camera:set-stream-quality', (_event, id: string, lowLatency: boolean) => store.setStreamQuality(id, lowLatency));
+  ipcMain.handle('camera:discover', () => discoverCameras());
 
   ipcMain.handle('camera:test', async (_event, id: string) => {
     const camera = await getCachedCamera(id);
+    if (camera.kind === 'generic') return { ok: true, message: 'Generic stream saved' };
     return reolink.testConnection(camera);
   });
 
   ipcMain.handle('camera:get-presets', async (_event, id: string) => {
     const camera = await getCachedCamera(id);
+    if (camera.kind === 'generic') return [];
+    if (camera.kind === 'panasonic') return panasonic.getPresets();
     return reolink.getPresets(camera).catch(() => []);
   });
 
   ipcMain.handle('camera:get-stream-info', async (_event, id: string) => {
     const camera = await getCachedCamera(id);
+    if (camera.kind === 'generic') return {};
+    if (camera.kind === 'panasonic') return {};
     return reolink.getStreamInfo(camera).catch(() => ({}));
   });
 
   ipcMain.handle('camera:get-profile', async (_event, id: string) => {
     const camera = await getCachedCamera(id);
+    if (camera.kind === 'generic') return undefined;
+    if (camera.kind === 'panasonic') return undefined;
     return reolink.getProfile(camera).catch(() => undefined);
   });
 
   ipcMain.handle('camera:get-ir-lights', async (_event, id: string) => {
     const camera = await getCachedCamera(id);
+    if (camera.kind === 'generic') return undefined;
     return reolink.getIrLights(camera).catch(() => undefined);
   });
 
@@ -210,6 +222,7 @@ function registerIpc(): void {
 
   ipcMain.handle('camera:get-white-led', async (_event, id: string) => {
     const camera = await getCachedCamera(id);
+    if (camera.kind === 'generic') return undefined;
     return reolink.getWhiteLed(camera).catch(() => undefined);
   });
 
@@ -220,6 +233,7 @@ function registerIpc(): void {
 
   ipcMain.handle('camera:get-siren-config', async (_event, id: string) => {
     const camera = await getCachedCamera(id);
+    if (camera.kind === 'generic') return undefined;
     return reolink.getSirenConfig(camera).catch(() => undefined);
   });
 
@@ -234,6 +248,11 @@ function registerIpc(): void {
 
   ipcMain.handle('camera:ptz', async (_event, id: string, command: PtzCommand) => {
     const camera = await getCachedCamera(id);
+    if (camera.kind === 'generic') return;
+    if (camera.kind === 'panasonic') {
+      await panasonic.sendPtz(camera, command);
+      return;
+    }
     await reolink.sendPtz(camera, command);
   });
 

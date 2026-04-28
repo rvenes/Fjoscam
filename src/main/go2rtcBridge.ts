@@ -6,6 +6,7 @@ import { app } from 'electron';
 import { join } from 'node:path';
 import type { CameraStore } from './store.js';
 import { buildRtspUrl } from './reolinkClient.js';
+import type { CameraWithSecret } from '../shared/types.js';
 
 const API_PORT = 1984;
 const WEBRTC_PORT = 8555;
@@ -29,7 +30,7 @@ export class Go2RtcBridge {
     await this.start();
     const camera = await this.store.getCameraWithSecret(cameraId);
     const streamName = safeStreamName(cameraId);
-    void putStream(streamName, buildRtspUrl(camera)).catch((error) => logBridge(`put stream warning: ${error instanceof Error ? error.message : String(error)}`));
+    void putStream(streamName, streamSource(camera)).catch((error) => logBridge(`put stream warning: ${error instanceof Error ? error.message : String(error)}`));
     await sleep(250);
     await logBridge(`stream registered name=${streamName}`);
     return {
@@ -78,6 +79,24 @@ export class Go2RtcBridge {
 
     await waitUntilReady();
     this.started = true;
+  }
+}
+
+function streamSource(camera: CameraWithSecret): string {
+  if (camera.kind === 'generic') {
+    if (!camera.streamUrl) throw new Error('Generic camera is missing stream URL.');
+    return normalizeGenericStreamUrl(camera.streamUrl);
+  }
+  return buildRtspUrl(camera);
+}
+
+function normalizeGenericStreamUrl(value: string): string {
+  try {
+    const url = new URL(value.trim());
+    if (url.searchParams.has('enableSrtp')) url.searchParams.delete('enableSrtp');
+    return url.toString();
+  } catch {
+    return value.trim().replace(/[?&]enableSrtp(?:=[^&]*)?/i, '');
   }
 }
 

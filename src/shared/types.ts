@@ -2,6 +2,7 @@ export type CameraId = string;
 
 export type CameraConfig = {
   id: CameraId;
+  kind?: 'reolink' | 'panasonic' | 'generic';
   name: string;
   host: string;
   protocol: 'http' | 'https';
@@ -11,6 +12,9 @@ export type CameraConfig = {
   channel: number;
   streamChannel: number;
   lowLatency: boolean;
+  mjpegPath?: string;
+  ptzPath?: string;
+  streamUrl?: string;
 };
 
 export type CameraSecret = {
@@ -18,6 +22,24 @@ export type CameraSecret = {
 };
 
 export type CameraInput = Omit<CameraConfig, 'id'> & CameraSecret;
+
+export type CameraDiscoveryResult = {
+  id: string;
+  host: string;
+  name?: string;
+  manufacturer?: string;
+  model?: string;
+  xaddrs: string[];
+  scopes: string[];
+  ports: {
+    http?: number;
+    https?: number;
+    rtsp?: number;
+    onvif?: number;
+    reolink?: number;
+  };
+  source: 'ws-discovery' | 'subnet-scan';
+};
 
 export type Preset = {
   id: number;

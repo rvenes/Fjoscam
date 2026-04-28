@@ -1,11 +1,12 @@
 import { FormEvent, MouseEvent, WheelEvent, useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import { ArrowDown, ArrowDownLeft, ArrowDownRight, ArrowLeft, ArrowRight, ArrowUp, ArrowUpLeft, ArrowUpRight, Camera, Crosshair, Eye, Focus, Loader2, Pause, Play, Plus, Radio, RotateCcw, Trash2, WifiOff, ZoomIn, ZoomOut } from 'lucide-react';
-import type { AppState, CameraConfig, CameraInput, CameraProfile, ConnectionStatus, IrLightMode, Preset, PtzCommand, PtzDirection, StreamInfo, UpdateStatus, WhiteLedState } from '../shared/types';
+import { ArrowDown, ArrowDownLeft, ArrowDownRight, ArrowLeft, ArrowRight, ArrowUp, ArrowUpLeft, ArrowUpRight, Camera, Crosshair, Eye, Focus, Loader2, Pause, Play, Plus, Radio, RotateCcw, Trash2, Volume2, VolumeX, WifiOff, ZoomIn, ZoomOut } from 'lucide-react';
+import type { AppState, CameraConfig, CameraDiscoveryResult, CameraInput, CameraProfile, ConnectionStatus, IrLightMode, Preset, PtzCommand, PtzDirection, StreamInfo, UpdateStatus, WhiteLedState } from '../shared/types';
 import { clickToPtzCommand } from '../shared/ptz';
 import './styles.css';
 
 const defaultInput: CameraInput = {
+  kind: 'reolink',
   name: '',
   host: '',
   protocol: 'http',
@@ -15,7 +16,10 @@ const defaultInput: CameraInput = {
   password: '',
   channel: 0,
   streamChannel: 0,
-  lowLatency: true,
+  lowLatency: false,
+  mjpegPath: '/nphMotionJpeg?Resolution=640x480&Quality=Standard',
+  ptzPath: '/nphControlCamera',
+  streamUrl: '',
 };
 
 const directions: Array<{ direction: PtzDirection; Icon: typeof ArrowUp; className: string }> = [
@@ -42,6 +46,9 @@ export default function App() {
   const [form, setForm] = useState<CameraInput>(defaultInput);
   const [editingId, setEditingId] = useState<string | undefined>();
   const [showSettings, setShowSettings] = useState(false);
+  const [discoveredCameras, setDiscoveredCameras] = useState<CameraDiscoveryResult[]>([]);
+  const [discoveryBusy, setDiscoveryBusy] = useState(false);
+  const [discoveryMessage, setDiscoveryMessage] = useState('');
   const [showTips, setShowTips] = useState(false);
   const [cameraEditMode, setCameraEditMode] = useState(false);
   const [ptzExpanded, setPtzExpanded] = useState(false);
@@ -64,10 +71,13 @@ export default function App() {
   const [streamRevision, setStreamRevision] = useState(0);
   const [digitalZoom, setDigitalZoom] = useState(1);
   const [opticalZoomLevel, setOpticalZoomLevel] = useState<1 | 2 | 3 | 4>(1);
+  const [audioMuted, setAudioMuted] = useState(true);
+  const [audioVolume, setAudioVolume] = useState(60);
   const [digitalPan, setDigitalPan] = useState({ x: 0, y: 0 });
   const [digitalOrigin, setDigitalOrigin] = useState({ x: 50, y: 50 });
   const stageRef = useRef<HTMLDivElement | null>(null);
   const mediaRef = useRef<HTMLImageElement | HTMLVideoElement | null>(null);
+  const webRtcFrameRef = useRef<HTMLIFrameElement | null>(null);
   const focusValueRef = useRef(focusSpeed);
   const dragRef = useRef<{
     active: boolean;
@@ -86,6 +96,7 @@ export default function App() {
     () => state.cameras.find((camera) => camera.id === state.activeCameraId) ?? null,
     [state],
   );
+  const isReolinkCamera = !activeCamera?.kind || activeCamera.kind === 'reolink';
   const hasSecondaryLens = activeCamera ? supportsSecondaryLens(activeCamera) : false;
 
   useEffect(() => {
@@ -215,7 +226,23 @@ export default function App() {
     void loadWebRtcRuntime(activeCamera.id);
   }, [activeCamera?.id, activeCamera?.streamChannel, activeCamera?.lowLatency, isStreamEnabled]);
 
+  useEffect(() => {
+    if (!showSettings || editingId) return;
+    void scanForCameras();
+  }, [showSettings, editingId]);
+
+  useEffect(() => {
+    applyWebRtcAudioSettings();
+  }, [audioMuted, audioVolume, snapshotUrl]);
+
   async function loadCameraProfile(id: string) {
+    const camera = state.cameras.find((item) => item.id === id);
+    if (camera?.kind !== 'reolink') {
+      setProfile(undefined);
+      setIrMode(undefined);
+      setWhiteLed(undefined);
+      return;
+    }
     const nextProfile = await window.fjoscam.getProfile(id);
     setProfile(nextProfile);
     if (nextProfile?.capabilities.irLights) setIrMode(await window.fjoscam.getIrLights(id));
@@ -225,6 +252,20 @@ export default function App() {
 
   async function refresh() {
     setState(await window.fjoscam.getState());
+  }
+
+  async function scanForCameras() {
+    setDiscoveryBusy(true);
+    setDiscoveryMessage('Searching local network...');
+    try {
+      const results = await window.fjoscam.discoverCameras();
+      setDiscoveredCameras(results);
+      setDiscoveryMessage(results.length > 0 ? `Found ${results.length} camera${results.length === 1 ? '' : 's'}.` : 'No cameras found. You can still add one manually.');
+    } catch (error) {
+      setDiscoveryMessage(errorMessage(error));
+    } finally {
+      setDiscoveryBusy(false);
+    }
   }
 
   async function setFullscreenMode(enabled: boolean) {
@@ -260,26 +301,34 @@ export default function App() {
     try {
       setFallbackUrl('');
       setSnapshotUrl('');
+      const camera = state.cameras.find((item) => item.id === id);
+      if (camera?.kind === 'panasonic') {
+        const mjpegUrl = await window.fjoscam.getMjpegUrl(id);
+        if (runtimeLoadRef.current !== loadId) return;
+        setSnapshotUrl(mjpegUrl);
+        setPresets(Array.from({ length: 10 }, (_item, index) => ({ id: index + 1, name: `Preset ${index + 1}` })));
+        setStreamInfo({});
+        setStreamRevision((value) => value + 1);
+        setMessage('Panasonic MJPEG live');
+        setStatus({ ok: true, message: 'Panasonic MJPEG live' });
+        return;
+      }
+      if (camera?.kind === 'generic') {
+        const webRtcStream = await window.fjoscam.getWebRtcStream(id);
+        if (runtimeLoadRef.current !== loadId) return;
+        setSnapshotUrl(webRtcStream.pageUrl);
+        setPresets([]);
+        setStreamInfo({});
+        setProfile(undefined);
+        setFallbackUrl('');
+        setStreamRevision((value) => value + 1);
+        setMessage('Generic WebRTC live');
+        setStatus({ ok: true, message: 'Generic WebRTC live' });
+        return;
+      }
       const nextStreamInfo: { high?: StreamInfo; low?: StreamInfo } = await window.fjoscam.getStreamInfo(id).catch(() => ({}));
       if (runtimeLoadRef.current !== loadId) return;
       setStreamInfo(nextStreamInfo);
-
-      const camera = state.cameras.find((item) => item.id === id);
-      const selectedInfo = camera?.lowLatency ? nextStreamInfo.low : nextStreamInfo.high;
-      const lowStreamIsPlayable = nextStreamInfo.low && !isH265Stream(nextStreamInfo.low);
-      if (camera && !camera.lowLatency && isH265Stream(selectedInfo) && lowStreamIsPlayable) {
-        setMessage('High/Clear uses H265 here. Switching to Low/Fluent for WebRTC on this machine.');
-        const nextState = await window.fjoscam.setStreamQuality(id, true);
-        if (runtimeLoadRef.current !== loadId) return;
-        setState(nextState);
-        return;
-      }
-
-      if (isH265Stream(selectedInfo)) {
-        setMessage('This stream uses H265, and WebRTC on this machine cannot play it. Try changing the camera stream codec to H264 in Reolink.');
-        setStatus({ ok: false, message: 'H265 stream is not playable in WebRTC here' });
-        return;
-      }
 
       const webRtcStream = await window.fjoscam.getWebRtcStream(id);
       if (runtimeLoadRef.current !== loadId) return;
@@ -466,9 +515,57 @@ export default function App() {
     }
   }
 
+  function useDiscoveredCamera(camera: CameraDiscoveryResult) {
+    const httpPort = camera.ports.https ?? camera.ports.http ?? 80;
+    const isPanasonic = camera.host === '10.0.0.83';
+    setForm({
+      ...form,
+      kind: isPanasonic ? 'panasonic' : 'reolink',
+      name: isPanasonic ? 'Panasonic' : discoveryDisplayName(camera),
+      host: camera.host,
+      protocol: camera.ports.https ? 'https' : 'http',
+      httpPort,
+      rtspPort: camera.ports.rtsp ?? 554,
+      username: isPanasonic ? 'codexc' : form.username,
+      channel: 0,
+      streamChannel: 0,
+      mjpegPath: '/nphMotionJpeg?Resolution=640x480&Quality=Standard',
+      ptzPath: '/nphControlCamera',
+    });
+    setMessage(`Selected ${camera.host}. Enter username and password, then save.`);
+  }
+
+  function setCameraKind(kind: CameraInput['kind']) {
+    setForm({
+      ...form,
+      kind,
+      ...(kind === 'panasonic'
+        ? {
+            name: form.name || 'Panasonic',
+            username: form.username === 'admin' ? 'codexc' : form.username,
+            httpPort: form.httpPort || 80,
+            rtspPort: form.rtspPort || 554,
+            mjpegPath: form.mjpegPath || '/nphMotionJpeg?Resolution=640x480&Quality=Standard',
+            ptzPath: form.ptzPath || '/nphControlCamera',
+          }
+        : kind === 'generic'
+          ? {
+              name: form.name || 'UniFi / generic stream',
+              host: inferHostFromStreamUrl(form.streamUrl || form.host),
+              username: form.username || '',
+              password: form.password || '',
+              httpPort: form.httpPort || 80,
+              rtspPort: form.rtspPort || 554,
+              streamUrl: form.streamUrl || '',
+            }
+        : {}),
+    });
+  }
+
   function editCamera(camera: CameraConfig) {
     setForm({
       ...camera,
+      kind: camera.kind ?? 'reolink',
       streamChannel: camera.streamChannel ?? camera.channel,
       password: '',
     });
@@ -477,7 +574,7 @@ export default function App() {
   }
 
   async function send(command: PtzCommand) {
-    if (!activeCamera) return;
+    if (!activeCamera || activeCamera.kind === 'generic') return;
     try {
       await window.fjoscam.sendPtz(activeCamera.id, command);
     } catch (error) {
@@ -638,6 +735,9 @@ export default function App() {
 
   function streamSrc(): string {
     if (!snapshotUrl) return '';
+    if (activeCamera?.kind === 'panasonic') {
+      return `${snapshotUrl}${snapshotUrl.includes('?') ? '&' : '?'}r=${streamRevision}`;
+    }
     const params = new URLSearchParams({
       r: String(streamRevision),
       lens: String(activeCamera?.streamChannel ?? 0),
@@ -649,7 +749,7 @@ export default function App() {
   const activeStreamInfo = activeCamera?.lowLatency ? streamInfo.low : streamInfo.high;
   const streamDetail = activeCamera
     ? isStreamEnabled && snapshotUrl
-      ? `WebRTC live${formatStreamInfo(activeStreamInfo)}${digitalZoom > 1 ? ` · Digital zoom ${digitalZoom.toFixed(1)}x` : ''}`
+      ? `${activeCamera.kind === 'panasonic' ? 'Panasonic MJPEG live' : `WebRTC live${formatStreamInfo(activeStreamInfo)}`}${digitalZoom > 1 ? ` · Digital zoom ${digitalZoom.toFixed(1)}x` : ''}`
       : 'Stream disconnected'
     : '';
 
@@ -667,9 +767,21 @@ export default function App() {
     setStatus({ ok: true, message: 'Connected' });
   }
 
+  function applyWebRtcAudioSettings() {
+    const frame = webRtcFrameRef.current;
+    frame?.contentWindow?.postMessage({ type: 'fjoscam-audio', muted: audioMuted || audioVolume === 0, volume: clamp(audioVolume / 100, 0, 1) }, '*');
+  }
+
+  function setVolume(value: number) {
+    const nextVolume = clamp(value, 0, 100);
+    setAudioVolume(nextVolume);
+    if (nextVolume > 0 && audioMuted) setAudioMuted(false);
+  }
+
   function handleImageReady() {
     setMessage('Connected');
     setStatus({ ok: true, message: 'Connected' });
+    applyWebRtcAudioSettings();
   }
 
   function clearCurrentStream() {
@@ -880,22 +992,22 @@ export default function App() {
         <header className="topbar">
           <div>
             <h1>{activeCamera?.name ?? 'Live View'}</h1>
-            <p>{activeCamera ? `${hasSecondaryLens ? ((activeCamera.streamChannel ?? 0) === 1 ? 'Zoom lens' : 'Wide lens') : 'Camera'} · ${activeCamera.lowLatency ? 'Low/Fluent' : 'High/Clear'}` : 'Add a camera to begin'}</p>
+            <p>{activeCamera ? cameraSubtitle(activeCamera, hasSecondaryLens) : 'Add a camera to begin'}</p>
           </div>
           <div className="top-actions">
-            {activeCamera && hasSecondaryLens && (
+            {activeCamera && isReolinkCamera && hasSecondaryLens && (
               <div className="channel-switch" aria-label="View channel">
                 <button className={(activeCamera.streamChannel ?? 0) === 0 ? 'selected' : ''} onClick={() => void setViewChannel(0)}>Wide</button>
                 <button className={(activeCamera.streamChannel ?? 0) === 1 ? 'selected' : ''} onClick={() => void setViewChannel(1)}>Zoom</button>
               </div>
             )}
-            {activeCamera && (
+            {activeCamera && isReolinkCamera && (
               <div className="channel-switch quality-switch" aria-label="Stream quality">
                 <button className={!activeCamera.lowLatency ? 'selected' : ''} onClick={() => void setStreamQuality(false)}>High</button>
                 <button className={activeCamera.lowLatency ? 'selected' : ''} onClick={() => void setStreamQuality(true)}>Low</button>
               </div>
             )}
-            {activeCamera && (
+            {activeCamera && isReolinkCamera && (
               <div className="channel-switch zoom-switch" aria-label="Optical zoom">
                 {([1, 2, 3, 4] as const).map((zoom) => (
                   <button key={zoom} className={opticalZoomLevel === zoom ? 'selected' : ''} onClick={() => void setOpticalZoom(zoom)}>
@@ -911,6 +1023,21 @@ export default function App() {
             <button className="selected-action" disabled={!activeCamera}>
               WebRTC
             </button>
+            {activeCamera && activeCamera.kind !== 'panasonic' && (
+              <div className="audio-control" aria-label="Audio volume">
+                <button type="button" title={audioMuted ? 'Unmute' : 'Mute'} onClick={() => setAudioMuted((value) => !value)}>
+                  {audioMuted || audioVolume === 0 ? <VolumeX size={18} /> : <Volume2 size={18} />}
+                </button>
+                <input
+                  type="range"
+                  min="0"
+                  max="100"
+                  value={audioVolume}
+                  onChange={(event) => setVolume(Number(event.target.value))}
+                  aria-label="Volume"
+                />
+              </div>
+            )}
           </div>
         </header>
 
@@ -928,10 +1055,12 @@ export default function App() {
             isStreamEnabled && snapshotUrl && snapshotUrl.includes('/stream.html') ? (
               <iframe
                 key={streamSrc()}
+                ref={webRtcFrameRef}
                 className="snapshot webrtc-frame"
                 src={streamSrc()}
                 title={`${activeCamera.name} WebRTC live view`}
                 allow="autoplay; fullscreen; picture-in-picture"
+                allowFullScreen
                 style={{
                   transform: `translate(${digitalPan.x}px, ${digitalPan.y}px) scale(${digitalZoom})`,
                   transformOrigin: `${digitalOrigin.x}% ${digitalOrigin.y}%`,
@@ -1016,6 +1145,26 @@ export default function App() {
             <div className="modal-actions">
               <button type="button" onClick={() => void checkForUpdates()}>Check for updates</button>
             </div>
+            <section className="donation-section">
+              <h3>Support development</h3>
+              <p>
+                If you enjoy this project and would like to support future development, donations are appreciated — but never expected.
+              </p>
+              <p>
+                Your contribution helps fund time spent on coding, testing, bug fixes, and new features across current and future open-source projects.
+              </p>
+              <p>Thank you for your support.</p>
+              <div className="modal-actions donation-actions">
+                <a
+                  className="donation-button"
+                  href="https://www.paypal.com/donate/?business=VSSTWS8ETDPXW&no_recurring=0&item_name=Support+my+software+projects+%E2%80%94+every+contribution+helps.+Thank+you%21&currency_code=USD"
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  Donate with PayPal
+                </a>
+              </div>
+            </section>
           </div>
         </div>
       )}
@@ -1054,21 +1203,65 @@ export default function App() {
                 ×
               </button>
             </div>
+            {!editingId && (
+              <section className="discovery-panel">
+                <div className="discovery-heading">
+                  <div>
+                    <strong>Found cameras</strong>
+                    <span>{discoveryMessage || 'Search for ONVIF and RTSP cameras on this network.'}</span>
+                  </div>
+                  <button type="button" onClick={() => void scanForCameras()} disabled={discoveryBusy}>
+                    {discoveryBusy ? 'Searching...' : 'Search again'}
+                  </button>
+                </div>
+                {discoveredCameras.length > 0 && (
+                  <div className="discovery-list">
+                    {discoveredCameras.map((camera) => (
+                      <button type="button" key={camera.id} className="discovery-item" onClick={() => useDiscoveredCamera(camera)}>
+                        <span>
+                          <strong>{discoveryDisplayName(camera)}</strong>
+                          <small>{camera.host} · {camera.source === 'ws-discovery' ? 'ONVIF discovery' : 'Port scan'}</small>
+                        </span>
+                        <small>{discoveryPorts(camera)}</small>
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </section>
+            )}
             <div className="form-grid">
+              <label>Camera type<select value={form.kind} onChange={(event) => setCameraKind(event.target.value as CameraInput['kind'])}><option value="reolink">Reolink LAN camera</option><option value="panasonic">Panasonic legacy MJPEG</option><option value="generic">Generic RTSP/RTSPS stream</option></select></label>
               <label>Name<span className="input-action"><input value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} /><button type="button" onClick={() => void fetchCameraName()} disabled={busy}>Fetch</button></span></label>
               <label>IP / host<input value={form.host} onChange={(event) => setForm({ ...form, host: event.target.value })} /></label>
               <label>Protocol<select value={form.protocol} onChange={(event) => setForm({ ...form, protocol: event.target.value as 'http' | 'https' })}><option>http</option><option>https</option></select></label>
               <label>HTTP port<input type="number" value={form.httpPort} onChange={(event) => setForm({ ...form, httpPort: Number(event.target.value) })} /></label>
-              <label>RTSP port<input type="number" value={form.rtspPort} onChange={(event) => setForm({ ...form, rtspPort: Number(event.target.value) })} /></label>
-              <label>Control channel<input type="number" min="0" value={form.channel} onChange={(event) => setForm({ ...form, channel: Number(event.target.value) })} /></label>
-              <label>View channel<select value={form.streamChannel} onChange={(event) => setForm({ ...form, streamChannel: Number(event.target.value) })}><option value={0}>0 - Wide/main</option><option value={1}>1 - Zoom/second</option></select></label>
-              <label>Username<input value={form.username} onChange={(event) => setForm({ ...form, username: event.target.value })} /></label>
-              <label>Password<input type="password" value={form.password} placeholder={editingId ? 'Enter to replace saved password' : ''} onChange={(event) => setForm({ ...form, password: event.target.value })} /></label>
+              {form.kind === 'generic' ? (
+                <label className="wide-field">Stream URL<input value={form.streamUrl ?? ''} placeholder="rtsps://10.0.0.1:7441/..." onChange={(event) => setForm({ ...form, streamUrl: event.target.value, host: inferHostFromStreamUrl(event.target.value) || form.host })} /></label>
+              ) : form.kind === 'reolink' ? (
+                <>
+                  <label>RTSP port<input type="number" value={form.rtspPort} onChange={(event) => setForm({ ...form, rtspPort: Number(event.target.value) })} /></label>
+                  <label>Control channel<input type="number" min="0" value={form.channel} onChange={(event) => setForm({ ...form, channel: Number(event.target.value) })} /></label>
+                  <label>View channel<select value={form.streamChannel} onChange={(event) => setForm({ ...form, streamChannel: Number(event.target.value) })}><option value={0}>0 - Wide/main</option><option value={1}>1 - Zoom/second</option></select></label>
+                </>
+              ) : (
+                <>
+                  <label className="wide-field">MJPEG path<input value={form.mjpegPath ?? ''} onChange={(event) => setForm({ ...form, mjpegPath: event.target.value })} /></label>
+                  <label className="wide-field">PTZ path<input value={form.ptzPath ?? ''} onChange={(event) => setForm({ ...form, ptzPath: event.target.value })} /></label>
+                </>
+              )}
+              {form.kind !== 'generic' && (
+                <>
+                  <label>Username<input value={form.username} onChange={(event) => setForm({ ...form, username: event.target.value })} /></label>
+                  <label>Password<input type="password" value={form.password} placeholder={editingId ? 'Enter to replace saved password' : ''} onChange={(event) => setForm({ ...form, password: event.target.value })} /></label>
+                </>
+              )}
             </div>
-            <label className="check-row">
-              <input type="checkbox" checked={form.lowLatency} onChange={(event) => setForm({ ...form, lowLatency: event.target.checked })} />
-              Prefer substream for lower latency
-            </label>
+            {form.kind === 'reolink' && (
+              <label className="check-row">
+                <input type="checkbox" checked={form.lowLatency} onChange={(event) => setForm({ ...form, lowLatency: event.target.checked })} />
+                Start this camera on Low/Fluent
+              </label>
+            )}
             <div className="modal-actions">
               {activeCamera && <button type="button" onClick={() => editCamera(activeCamera)}>Edit active</button>}
               <button type="submit" disabled={busy}>{busy ? 'Saving...' : 'Save camera'}</button>
@@ -1119,6 +1312,34 @@ function updateMessage(status: UpdateStatus): string {
       return `Versjon ${status.version} er lasta ned og klar til installasjon.`;
     case 'error':
       return status.message;
+  }
+}
+
+function discoveryDisplayName(camera: CameraDiscoveryResult): string {
+  return camera.name || [camera.manufacturer, camera.model].filter(Boolean).join(' ') || `Camera ${camera.host}`;
+}
+
+function discoveryPorts(camera: CameraDiscoveryResult): string {
+  const parts = [
+    camera.ports.http ? `HTTP ${camera.ports.http}` : '',
+    camera.ports.https ? `HTTPS ${camera.ports.https}` : '',
+    camera.ports.rtsp ? `RTSP ${camera.ports.rtsp}` : '',
+    camera.ports.onvif ? `ONVIF ${camera.ports.onvif}` : '',
+  ].filter(Boolean);
+  return parts.join(' · ');
+}
+
+function cameraSubtitle(camera: CameraConfig, hasSecondaryLens: boolean): string {
+  if (camera.kind === 'generic') return 'Generic RTSP/RTSPS stream';
+  if (camera.kind === 'panasonic') return 'Panasonic MJPEG';
+  return `${hasSecondaryLens ? ((camera.streamChannel ?? 0) === 1 ? 'Zoom lens' : 'Wide lens') : 'Camera'} · ${camera.lowLatency ? 'Low/Fluent' : 'High/Clear'}`;
+}
+
+function inferHostFromStreamUrl(value: string): string {
+  try {
+    return new URL(value).hostname;
+  } catch {
+    return value.replace(/^[a-z]+:\/\//i, '').replace(/\/.*$/, '').replace(/:\d+$/, '');
   }
 }
 
@@ -1209,10 +1430,6 @@ function formatStreamInfo(info?: StreamInfo): string {
     info.codec?.toUpperCase() ?? '',
   ].filter(Boolean);
   return parts.length ? ` · ${parts.join(' · ')}` : '';
-}
-
-function isH265Stream(info?: StreamInfo): boolean {
-  return /h\.?265|hevc/i.test(info?.codec ?? '');
 }
 
 createRoot(document.getElementById('root')!).render(<App />);

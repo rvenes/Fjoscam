@@ -2,6 +2,7 @@ import { contextBridge, ipcRenderer } from 'electron';
 import type { IpcRendererEvent } from 'electron';
 import type {
   AppState,
+  CameraDiscoveryResult,
   CameraInput,
   CameraProfile,
   ConnectionStatus,
@@ -35,6 +36,7 @@ const api = {
   setActiveCamera: (id: string): Promise<AppState> => ipcRenderer.invoke('camera:set-active', id),
   setStreamChannel: (id: string, channel: number): Promise<AppState> => ipcRenderer.invoke('camera:set-stream-channel', id, channel),
   setStreamQuality: (id: string, lowLatency: boolean): Promise<AppState> => ipcRenderer.invoke('camera:set-stream-quality', id, lowLatency),
+  discoverCameras: (): Promise<CameraDiscoveryResult[]> => ipcRenderer.invoke('camera:discover'),
   testCamera: (id: string): Promise<ConnectionStatus> => ipcRenderer.invoke('camera:test', id),
   getPresets: (id: string): Promise<Preset[]> => ipcRenderer.invoke('camera:get-presets', id),
   getStreamInfo: (id: string): Promise<{ high?: StreamInfo; low?: StreamInfo }> => ipcRenderer.invoke('camera:get-stream-info', id),

@@ -1,6 +1,10 @@
 import { createServer, type Server } from 'node:http';
+import { appendFile } from 'node:fs/promises';
+import { app } from 'electron';
+import { join } from 'node:path';
 import type { CameraStore } from './store.js';
 import type { ReolinkClient } from './reolinkClient.js';
+import { openPanasonicStream } from './panasonicClient.js';
 
 export class SnapshotServer {
   private server: Server | null = null;
@@ -21,8 +25,27 @@ export class SnapshotServer {
           return;
         }
 
+        void logSnapshot(`request ${request.url ?? 'unknown'}`);
         const camera = await this.store.getCameraWithSecret(decodeURIComponent(match[1]));
         if (mjpegMatch) {
+          if (camera.kind === 'panasonic') {
+            const upstream = await openPanasonicStream(camera);
+            const upstreamContentType = Array.isArray(upstream.headers['content-type'])
+              ? upstream.headers['content-type'][0]
+              : upstream.headers['content-type'];
+            response.writeHead(200, {
+              'content-type': 'multipart/x-mixed-replace; boundary=fjoscam-panasonic',
+              'cache-control': 'no-store, no-cache, must-revalidate',
+              pragma: 'no-cache',
+              connection: 'close',
+              'access-control-allow-origin': '*',
+            });
+            void logSnapshot(`panasonic mjpeg proxy ${camera.host} content-type=${upstreamContentType ?? 'missing'}`);
+            pipePanasonicMjpeg(upstream, response, upstreamContentType);
+            request.on('close', () => upstream.destroy());
+            return;
+          }
+
           response.writeHead(200, {
             'content-type': 'multipart/x-mixed-replace; boundary=fjoscam',
             'cache-control': 'no-store, no-cache, must-revalidate',
@@ -59,6 +82,7 @@ export class SnapshotServer {
         });
         response.end(cameraResponse.bytes);
       } catch (error) {
+        void logSnapshot(`request failed ${request.url ?? 'unknown'}: ${error instanceof Error ? error.message : String(error)}`);
         response.writeHead(500).end(error instanceof Error ? error.message : 'Snapshot error');
       }
     });
@@ -98,4 +122,63 @@ export class SnapshotServer {
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function logSnapshot(message: string): Promise<void> {
+  await appendFile(join(app.getPath('userData'), 'snapshot-server.log'), `${new Date().toISOString()} ${message}\n`, 'utf8').catch(() => undefined);
+}
+
+function pipePanasonicMjpeg(upstream: NodeJS.ReadableStream, response: NodeJS.WritableStream & { destroyed?: boolean }, contentType?: string): void {
+  const outputBoundary = 'fjoscam-panasonic';
+  let buffer = Buffer.alloc(0);
+  let frames = 0;
+
+  upstream.on('data', (chunk: Buffer) => {
+    buffer = Buffer.concat([buffer, chunk]);
+    while (!response.destroyed) {
+      const frameStart = findJpegStart(buffer);
+      if (frameStart < 0) {
+        if (buffer.length > 1024 * 1024) buffer = buffer.subarray(buffer.length - 2);
+        return;
+      }
+      if (frameStart > 0) buffer = buffer.subarray(frameStart);
+
+      const frameEnd = findJpegEnd(buffer, 2);
+      if (frameEnd < 0) return;
+
+      const frame = buffer.subarray(0, frameEnd);
+      writeMjpegFrame(response, outputBoundary, frame);
+      frames += 1;
+      if (frames === 1) void logSnapshot(`panasonic first frame proxied (${frame.length} bytes, ${contentType ?? 'no content-type'})`);
+      buffer = buffer.subarray(frameEnd);
+    }
+  });
+
+  upstream.on('end', () => {
+    if (!response.destroyed) response.end();
+  });
+  upstream.on('error', (error) => {
+    void logSnapshot(`panasonic upstream error: ${error instanceof Error ? error.message : String(error)}`);
+    if (!response.destroyed) response.end();
+  });
+}
+
+function writeMjpegFrame(response: NodeJS.WritableStream, boundary: string, frame: Buffer): void {
+  response.write(`--${boundary}\r\ncontent-type: image/jpeg\r\ncontent-length: ${frame.length}\r\n\r\n`);
+  response.write(frame);
+  response.write('\r\n');
+}
+
+function findJpegStart(buffer: Buffer): number {
+  for (let index = 0; index < buffer.length - 1; index += 1) {
+    if (buffer[index] === 0xff && buffer[index + 1] === 0xd8) return index;
+  }
+  return -1;
+}
+
+function findJpegEnd(buffer: Buffer, start: number): number {
+  for (let index = start; index < buffer.length - 1; index += 1) {
+    if (buffer[index] === 0xff && buffer[index + 1] === 0xd9) return index + 2;
+  }
+  return -1;
 }

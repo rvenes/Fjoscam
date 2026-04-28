@@ -427,6 +427,7 @@ button:disabled {
   display: flex;
   gap: 10px;
   align-items: center;
+  flex-wrap: wrap;
 }
 
 .top-actions button, .preset-list button, .modal-actions button {
@@ -441,6 +442,26 @@ button:disabled {
 
 .top-actions button.selected-action {
   background: #5a6650;
+}
+
+.audio-control {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 46px;
+  padding: 4px 10px;
+  border-radius: 7px;
+  background: #2c3131;
+}
+
+.audio-control button {
+  min-height: 34px;
+  padding: 0 9px;
+}
+
+.audio-control input {
+  width: 92px;
+  accent-color: #5ba8ff;
 }
 
 .channel-switch {
@@ -675,7 +696,7 @@ button:disabled {
 .small-modal {
   display: grid;
   gap: 14px;
-  width: min(430px, 100%);
+  width: min(500px, 100%);
   padding: 22px;
   border-radius: 8px;
   background: #252828;
@@ -686,6 +707,41 @@ button:disabled {
 .small-modal p {
   margin: 0;
   line-height: 1.45;
+}
+
+.donation-section {
+  display: grid;
+  gap: 10px;
+  margin-top: 4px;
+  padding-top: 16px;
+  border-top: 1px solid #3a4444;
+}
+
+.donation-section h3 {
+  margin: 0;
+  font-size: 18px;
+}
+
+.donation-actions {
+  margin-top: 4px;
+}
+
+.donation-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 38px;
+  padding: 0 16px;
+  border: 1px solid #68805a;
+  border-radius: 8px;
+  color: #f5fbef;
+  background: #526849;
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.donation-button:hover {
+  background: #5f7854;
 }
 
 .muted-text {
@@ -699,6 +755,75 @@ button:disabled {
 
 .modal-heading h2 {
   margin: 0;
+}
+
+.discovery-panel {
+  display: grid;
+  gap: 12px;
+  margin-top: 14px;
+  padding: 14px;
+  border: 1px solid #3f4a4a;
+  border-radius: 8px;
+  background: #202525;
+}
+
+.discovery-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.discovery-heading div {
+  display: grid;
+  gap: 4px;
+}
+
+.discovery-heading span,
+.discovery-item small {
+  color: #a8b1b0;
+}
+
+.discovery-heading button {
+  min-height: 36px;
+  padding: 0 12px;
+  border-radius: 6px;
+  background: #3a3f3f;
+}
+
+.discovery-list {
+  display: grid;
+  gap: 8px;
+  max-height: 190px;
+  overflow: auto;
+  scrollbar-width: none;
+}
+
+.discovery-list::-webkit-scrollbar {
+  display: none;
+}
+
+.discovery-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid #465151;
+  border-radius: 8px;
+  color: #f6f7f2;
+  background: #2d3333;
+  text-align: left;
+}
+
+.discovery-item:hover {
+  background: #354040;
+}
+
+.discovery-item span {
+  display: grid;
+  gap: 3px;
 }
 
 .form-grid {
@@ -722,6 +847,10 @@ button:disabled {
   border-radius: 6px;
   color: #f6f7f2;
   background: #161818;
+}
+
+.wide-field {
+  grid-column: 1 / -1;
 }
 
 .input-action {
