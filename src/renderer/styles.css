@@ -12,10 +12,15 @@
 body {
   margin: 0;
   overflow: hidden;
+  user-select: none;
 }
 
 button, input, select {
   font: inherit;
+}
+
+input, textarea, select {
+  user-select: text;
 }
 
 button {
@@ -651,6 +656,20 @@ button:disabled {
   box-shadow: 0 16px 44px rgba(0, 0, 0, 0.42);
 }
 
+.tips-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.tips-heading .icon-button {
+  width: 32px;
+  height: 32px;
+  font-size: 22px;
+  line-height: 1;
+}
+
 .tips-popover strong {
   font-size: 16px;
 }
@@ -680,17 +699,21 @@ button:disabled {
   z-index: 6;
   display: grid;
   place-items: center;
-  padding: 24px;
+  padding: clamp(8px, 3vh, 24px);
   background: rgba(0, 0, 0, 0.62);
+  overflow: hidden;
 }
 
 .settings-modal {
   width: min(760px, 100%);
-  padding: 22px;
+  max-height: calc(100vh - clamp(16px, 6vh, 48px));
+  overflow: auto;
+  padding: clamp(14px, 2.4vh, 22px);
   border-radius: 8px;
   background: #252828;
   border: 1px solid #404646;
   box-shadow: 0 24px 80px rgba(0, 0, 0, 0.5);
+  scrollbar-width: thin;
 }
 
 .small-modal {
@@ -759,9 +782,9 @@ button:disabled {
 
 .discovery-panel {
   display: grid;
-  gap: 12px;
-  margin-top: 14px;
-  padding: 14px;
+  gap: 10px;
+  margin-top: 12px;
+  padding: 12px;
   border: 1px solid #3f4a4a;
   border-radius: 8px;
   background: #202525;
@@ -793,8 +816,8 @@ button:disabled {
 
 .discovery-list {
   display: grid;
-  gap: 8px;
-  max-height: 190px;
+  gap: 6px;
+  max-height: min(24vh, 150px);
   overflow: auto;
   scrollbar-width: none;
 }
@@ -804,12 +827,13 @@ button:disabled {
 }
 
 .discovery-item {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
-  justify-content: space-between;
   gap: 12px;
   width: 100%;
-  padding: 10px 12px;
+  min-height: 54px;
+  padding: 8px 12px;
   border: 1px solid #465151;
   border-radius: 8px;
   color: #f6f7f2;
@@ -821,16 +845,41 @@ button:disabled {
   background: #354040;
 }
 
-.discovery-item span {
+.discovery-item.already-added {
+  border-color: #5c7e58;
+  background: #29352d;
+}
+
+.discovery-main {
   display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  min-width: 0;
+  gap: 9px;
+}
+
+.discovery-check {
+  color: #7fd36f;
+}
+
+.discovery-item span span {
+  display: grid;
+  min-width: 0;
   gap: 3px;
+}
+
+.discovery-item strong,
+.discovery-item small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .form-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 14px;
-  margin: 18px 0;
+  gap: 12px;
+  margin: 14px 0;
 }
 
 .form-grid label, .check-row {
@@ -869,11 +918,19 @@ button:disabled {
 .check-row {
   display: flex;
   align-items: center;
+  min-height: 34px;
 }
 
 .modal-actions {
+  position: sticky;
+  bottom: -1px;
+  display: flex;
+  gap: 10px;
   justify-content: flex-end;
-  margin-top: 18px;
+  margin: 14px -2px -2px;
+  padding: 10px 2px 2px;
+  background: #252828;
+  border-top: 1px solid #3a4444;
 }
 
 .danger {
@@ -887,6 +944,66 @@ button:disabled {
 @keyframes spin {
   to {
     transform: rotate(360deg);
+  }
+}
+
+@media (max-width: 1180px), (max-height: 760px) {
+  .modal-backdrop {
+    align-items: stretch;
+  }
+
+  .settings-modal {
+    width: min(920px, 100%);
+  }
+
+  .discovery-list {
+    max-height: min(20vh, 118px);
+  }
+
+  .form-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .wide-field {
+    grid-column: auto;
+  }
+
+  .input-action {
+    grid-template-columns: minmax(0, 1fr) minmax(76px, auto);
+  }
+}
+
+@media (max-width: 760px) {
+  .modal-backdrop {
+    padding: 6px;
+  }
+
+  .settings-modal {
+    max-height: calc(100vh - 12px);
+    padding: 12px;
+  }
+
+  .discovery-heading,
+  .discovery-item,
+  .modal-actions {
+    grid-template-columns: 1fr;
+  }
+
+  .discovery-heading {
+    display: grid;
+  }
+
+  .discovery-item {
+    justify-items: start;
+  }
+
+  .discovery-item strong,
+  .discovery-item small {
+    white-space: normal;
+  }
+
+  .modal-actions {
+    display: grid;
   }
 }
 

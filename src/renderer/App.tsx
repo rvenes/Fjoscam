@@ -1,6 +1,6 @@
 import { FormEvent, MouseEvent, WheelEvent, useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import { ArrowDown, ArrowDownLeft, ArrowDownRight, ArrowLeft, ArrowRight, ArrowUp, ArrowUpLeft, ArrowUpRight, Camera, Crosshair, Eye, Focus, Loader2, Pause, Play, Plus, Radio, RotateCcw, Trash2, Volume2, VolumeX, WifiOff, ZoomIn, ZoomOut } from 'lucide-react';
+import { ArrowDown, ArrowDownLeft, ArrowDownRight, ArrowLeft, ArrowRight, ArrowUp, ArrowUpLeft, ArrowUpRight, Camera, CheckCircle2, Crosshair, Eye, Focus, Loader2, Pause, Play, Plus, Radio, RotateCcw, Trash2, Volume2, VolumeX, WifiOff, ZoomIn, ZoomOut } from 'lucide-react';
 import type { AppState, CameraConfig, CameraDiscoveryResult, CameraInput, CameraProfile, ConnectionStatus, IrLightMode, Preset, PtzCommand, PtzDirection, StreamInfo, UpdateStatus, WhiteLedState } from '../shared/types';
 import { clickToPtzCommand } from '../shared/ptz';
 import './styles.css';
@@ -97,6 +97,7 @@ export default function App() {
     () => state.cameras.find((camera) => camera.id === state.activeCameraId) ?? null,
     [state],
   );
+  const existingCameraHosts = useMemo(() => new Set(state.cameras.map((camera) => camera.host).filter(Boolean)), [state.cameras]);
   const isReolinkCamera = !activeCamera?.kind || activeCamera.kind === 'reolink';
   const hasSecondaryLens = activeCamera ? supportsSecondaryLens(activeCamera) : false;
 
@@ -1041,9 +1042,6 @@ export default function App() {
               {busy ? <Loader2 className="spin" size={18} /> : isStreamEnabled ? <Pause size={18} /> : <Play size={18} />}
               {isStreamEnabled ? 'Disconnect' : 'Connect'}
             </button>
-            <button className="selected-action" disabled={!activeCamera}>
-              WebRTC
-            </button>
             {activeCamera && activeCamera.kind !== 'panasonic' && (
               <div className="audio-control" aria-label="Audio volume">
                 <button type="button" title={audioMuted ? 'Unmute' : 'Mute'} onClick={() => setAudioMuted((value) => !value)}>
@@ -1140,15 +1138,21 @@ export default function App() {
       </section>
 
       {showTips && (
-        <div className="tips-popover">
-          <strong>Hjelp</strong>
-          <span><kbd>Enter</kbd> fullskjerm av/på.</span>
-          <span><kbd>Page Up</kbd> neste kamera. <kbd>Page Down</kbd> førre kamera.</span>
-          <span><kbd>←</kbd> <kbd>↑</kbd> <kbd>↓</kbd> <kbd>→</kbd>, <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> eller numpad styrer kamera.</span>
-          <span><kbd>1</kbd>-<kbd>9</kbd> går til lagra PTZ-posisjon 1-9. <kbd>0</kbd> går til posisjon 10.</span>
-          <span><kbd>+</kbd> og <kbd>-</kbd> justerer PT-farten.</span>
-          <span>1x, 2x, 3x og 4x styrer optisk zoom når kameraet støttar det.</span>
-          <button onClick={() => void checkForUpdates()}>Check for updates</button>
+        <div className="tips-popover" role="dialog" aria-label="Tips">
+          <div className="tips-heading">
+            <strong>Tips</strong>
+            <button type="button" className="icon-button" title="Close tips" onClick={() => setShowTips(false)}>
+              X
+            </button>
+          </div>
+          <span><kbd>Enter</kbd> toggles fullscreen.</span>
+          <span><kbd>Page Up</kbd> selects the next camera. <kbd>Page Down</kbd> selects the previous camera.</span>
+          <span><kbd>←</kbd> <kbd>↑</kbd> <kbd>↓</kbd> <kbd>→</kbd>, <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd>, or the numpad moves PTZ cameras.</span>
+          <span><kbd>1</kbd>-<kbd>9</kbd> recalls PTZ preset 1-9. <kbd>0</kbd> recalls preset 10.</span>
+          <span><kbd>+</kbd> and <kbd>-</kbd> adjust PTZ speed.</span>
+          <span>1x, 2x, 3x, and 4x control optical zoom when the camera supports it.</span>
+          <span><strong>MSE</strong> means Media Source Extensions. It is the browser player go2rtc often uses when audio compatibility is better than RTC.</span>
+          <span><strong>RTC</strong> means WebRTC. It is usually the lowest-latency player.</span>
         </div>
       )}
 
@@ -1237,15 +1241,21 @@ export default function App() {
                 </div>
                 {discoveredCameras.length > 0 && (
                   <div className="discovery-list">
-                    {discoveredCameras.map((camera) => (
-                      <button type="button" key={camera.id} className="discovery-item" onClick={() => useDiscoveredCamera(camera)}>
-                        <span>
-                          <strong>{discoveryDisplayName(camera)}</strong>
-                          <small>{camera.host} · {camera.source === 'ws-discovery' ? 'ONVIF discovery' : 'Port scan'}</small>
-                        </span>
-                        <small>{discoveryPorts(camera)}</small>
-                      </button>
-                    ))}
+                    {discoveredCameras.map((camera) => {
+                      const alreadyAdded = existingCameraHosts.has(camera.host);
+                      return (
+                        <button type="button" key={camera.id} className={`discovery-item ${alreadyAdded ? 'already-added' : ''}`} onClick={() => useDiscoveredCamera(camera)}>
+                          <span className="discovery-main">
+                            {alreadyAdded && <CheckCircle2 className="discovery-check" size={18} aria-label="Already added" />}
+                            <span>
+                              <strong>{discoveryDisplayName(camera)}</strong>
+                              <small>{camera.host} · {camera.source === 'ws-discovery' ? 'ONVIF discovery' : 'Port scan'}</small>
+                            </span>
+                          </span>
+                          <small>{discoveryPorts(camera)}</small>
+                        </button>
+                      );
+                    })}
                   </div>
                 )}
               </section>
@@ -1278,7 +1288,7 @@ export default function App() {
               )}
             </div>
             {form.kind === 'reolink' && (
-              <label className="check-row">
+              <label className="check-row wide-field">
                 <input type="checkbox" checked={form.lowLatency} onChange={(event) => setForm({ ...form, lowLatency: event.target.checked })} />
                 Start this camera on Low/Fluent
               </label>

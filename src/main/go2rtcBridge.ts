@@ -204,5 +204,12 @@ function sleep(ms: number): Promise<void> {
 
 async function logBridge(message: string): Promise<void> {
   if (!message) return;
-  await appendFile(join(app.getPath('userData'), 'go2rtc-bridge.log'), `${new Date().toISOString()} ${message}\n`, 'utf8').catch(() => undefined);
+  await appendFile(join(app.getPath('userData'), 'go2rtc-bridge.log'), `${new Date().toISOString()} ${sanitizeLogMessage(message)}\n`, 'utf8').catch(() => undefined);
+}
+
+function sanitizeLogMessage(value: string): string {
+  return value
+    .replace(/([?&]token=)[^&\s]+/gi, '$1[redacted]')
+    .replace(/\b(rtsp|rtsps):\/\/([^:\s/@]+):([^@\s]+)@/gi, '$1://$2:[redacted]@')
+    .replace(/(src=)([^&\s]{64,})/gi, '$1[redacted]');
 }

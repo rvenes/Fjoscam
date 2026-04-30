@@ -18,6 +18,7 @@ const go2rtc = new Go2RtcBridge(store);
 const updater = new AppUpdater();
 const panasonic = new PanasonicClient();
 const cameraCache = new Map<string, CameraWithSecret>();
+const allowedExternalHosts = new Set(['github.com', 'www.github.com', 'paypal.com', 'www.paypal.com', 'venes.org', 'www.venes.org']);
 let isShuttingDown = false;
 
 async function createWindow(): Promise<void> {
@@ -32,9 +33,8 @@ async function createWindow(): Promise<void> {
       preload: join(__dirname, '../preload/preload.js'),
       contextIsolation: true,
       nodeIntegration: false,
-      webSecurity: false,
-      allowRunningInsecureContent: true,
-      webviewTag: true,
+      webSecurity: true,
+      allowRunningInsecureContent: false,
     },
   });
 
@@ -42,13 +42,13 @@ async function createWindow(): Promise<void> {
     const details = event as unknown as { level?: string | number; message?: string };
     void appendFile(
       join(app.getPath('userData'), 'renderer.log'),
-      `${new Date().toISOString()} [${details.level ?? 'info'}] ${details.message ?? ''}\n`,
+      `${new Date().toISOString()} [${details.level ?? 'info'}] ${sanitizeLogMessage(details.message ?? '')}\n`,
       'utf8',
     ).catch(() => undefined);
   });
 
   window.webContents.setWindowOpenHandler(({ url }) => {
-    shell.openExternal(url);
+    if (isAllowedExternalUrl(url)) void shell.openExternal(url);
     return { action: 'deny' };
   });
 
@@ -303,12 +303,37 @@ async function setStreamFrameAudio(window: BrowserWindow, muted: boolean, volume
   const results = await Promise.allSettled(frames.map((frame) => frame.executeJavaScript(script, true)));
   const summary = results.map((result, index) => {
     const frame = frames[index];
-    const value = result.status === 'fulfilled' ? result.value : `error:${result.reason instanceof Error ? result.reason.message : String(result.reason)}`;
-    return `${frame.url} => ${value}`;
+    const value = result.status === 'fulfilled' ? String(result.value) : `error:${result.reason instanceof Error ? result.reason.message : String(result.reason)}`;
+    return `${safeFrameLabel(frame.url)} => ${sanitizeLogMessage(value)}`;
   });
   await appendFile(join(app.getPath('userData'), 'renderer.log'), `${new Date().toISOString()} [audio] muted=${muted} volume=${clampedVolume} frames=${frames.length} ${summary.join(' | ')}\n`, 'utf8').catch(() => undefined);
 }
 
 function streamFrames(frame: WebFrameMain): WebFrameMain[] {
   return frame.framesInSubtree.filter((candidate) => candidate.url.startsWith('http://127.0.0.1:1984/'));
+}
+
+function isAllowedExternalUrl(value: string): boolean {
+  try {
+    const url = new URL(value);
+    return url.protocol === 'https:' && allowedExternalHosts.has(url.hostname.toLowerCase());
+  } catch {
+    return false;
+  }
+}
+
+function safeFrameLabel(value: string): string {
+  try {
+    const url = new URL(value);
+    return `${url.origin}${url.pathname}`;
+  } catch {
+    return sanitizeLogMessage(value).slice(0, 80);
+  }
+}
+
+function sanitizeLogMessage(value: string): string {
+  return value
+    .replace(/([?&]token=)[^&\s]+/gi, '$1[redacted]')
+    .replace(/\b(rtsp|rtsps):\/\/([^:\s/@]+):([^@\s]+)@/gi, '$1://$2:[redacted]@')
+    .replace(/(src=)([^&\s]{64,})/gi, '$1[redacted]');
 }
