@@ -78,6 +78,7 @@ export default function App() {
   const stageRef = useRef<HTMLDivElement | null>(null);
   const mediaRef = useRef<HTMLImageElement | HTMLVideoElement | null>(null);
   const webRtcFrameRef = useRef<HTMLIFrameElement | null>(null);
+  const audioApplyTimerRef = useRef<number | null>(null);
   const focusValueRef = useRef(focusSpeed);
   const dragRef = useRef<{
     active: boolean;
@@ -120,6 +121,7 @@ export default function App() {
       setShowAbout(true);
     });
     return () => {
+      if (audioApplyTimerRef.current !== null) window.clearTimeout(audioApplyTimerRef.current);
       removeOpenPanelListener();
       removeCameraEditListener();
       removeUpdateListener();
@@ -768,8 +770,27 @@ export default function App() {
   }
 
   function applyWebRtcAudioSettings() {
+    const settings = { muted: audioMuted || audioVolume === 0, volume: clamp(audioVolume / 100, 0, 1) };
+    applyIframeVideoAudio(settings);
+    void window.fjoscam.setStreamAudio(settings.muted, settings.volume);
+  }
+
+  function applyIframeVideoAudio(settings: { muted: boolean; volume: number }): boolean {
     const frame = webRtcFrameRef.current;
-    frame?.contentWindow?.postMessage({ type: 'fjoscam-audio', muted: audioMuted || audioVolume === 0, volume: clamp(audioVolume / 100, 0, 1) }, '*');
+    const video = frame?.contentDocument?.querySelector('video');
+    if (!video) return false;
+    video.muted = settings.muted;
+    video.volume = settings.volume;
+    return true;
+  }
+
+  function scheduleIframeAudioApply(attempts: number) {
+    if (audioApplyTimerRef.current !== null) window.clearTimeout(audioApplyTimerRef.current);
+    const apply = (remaining: number) => {
+      if (applyIframeVideoAudio({ muted: audioMuted || audioVolume === 0, volume: clamp(audioVolume / 100, 0, 1) }) || remaining <= 0) return;
+      audioApplyTimerRef.current = window.setTimeout(() => apply(remaining - 1), 250);
+    };
+    apply(attempts);
   }
 
   function setVolume(value: number) {
@@ -781,7 +802,7 @@ export default function App() {
   function handleImageReady() {
     setMessage('Connected');
     setStatus({ ok: true, message: 'Connected' });
-    applyWebRtcAudioSettings();
+    scheduleIframeAudioApply(8);
   }
 
   function clearCurrentStream() {

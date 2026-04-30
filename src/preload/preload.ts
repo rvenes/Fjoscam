@@ -53,6 +53,7 @@ const api = {
   getSnapshotUrl: (id: string): Promise<string> => ipcRenderer.invoke('camera:get-snapshot-url', id),
   getMjpegUrl: (id: string): Promise<string> => ipcRenderer.invoke('camera:get-mjpeg-url', id),
   getWebRtcStream: (id: string): Promise<WebRtcStream> => ipcRenderer.invoke('camera:get-webrtc-stream', id),
+  setStreamAudio: (muted: boolean, volume: number): Promise<void> => ipcRenderer.invoke('stream:set-audio', muted, volume),
   onOpenPanel: (callback: (panel: 'settings' | 'tips') => void): (() => void) => {
     const listener = (_event: IpcRendererEvent, panel: 'settings' | 'tips') => callback(panel);
     ipcRenderer.on('app:open-panel', listener);

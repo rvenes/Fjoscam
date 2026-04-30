@@ -1,4 +1,4 @@
-import { app, BrowserWindow, Menu, ipcMain, shell } from 'electron';
+import { app, BrowserWindow, Menu, ipcMain, shell, type WebFrameMain } from 'electron';
 import { appendFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { CameraStore } from './store.js';
@@ -259,6 +259,11 @@ function registerIpc(): void {
   ipcMain.handle('camera:get-snapshot-url', (_event, id: string) => snapshots.getSnapshotUrl(id));
   ipcMain.handle('camera:get-mjpeg-url', (_event, id: string) => snapshots.getMjpegUrl(id));
   ipcMain.handle('camera:get-webrtc-stream', (_event, id: string) => go2rtc.getStream(id));
+  ipcMain.handle('stream:set-audio', async (event, muted: boolean, volume: number) => {
+    const window = BrowserWindow.fromWebContents(event.sender);
+    if (!window) return;
+    await setStreamFrameAudio(window, muted, volume);
+  });
 }
 
 async function getCachedCamera(id: string): Promise<CameraWithSecret> {
@@ -267,4 +272,43 @@ async function getCachedCamera(id: string): Promise<CameraWithSecret> {
   const camera = await store.getCameraWithSecret(id);
   cameraCache.set(id, camera);
   return camera;
+}
+
+async function setStreamFrameAudio(window: BrowserWindow, muted: boolean, volume: number): Promise<void> {
+  const clampedVolume = Math.max(0, Math.min(1, Number(volume) || 0));
+  window.webContents.setAudioMuted(muted || clampedVolume === 0);
+  const script = `
+    (() => {
+      const apply = () => {
+        const videos = Array.from(document.querySelectorAll('video'));
+        for (const video of videos) {
+          video.muted = ${muted ? 'true' : 'false'};
+          video.volume = ${JSON.stringify(clampedVolume)};
+        }
+        return videos.length;
+      };
+      let count = apply();
+      if (!count) {
+        let attempts = 8;
+        const timer = setInterval(() => {
+          count = apply();
+          attempts -= 1;
+          if (count || attempts <= 0) clearInterval(timer);
+        }, 250);
+      }
+      return count;
+    })();
+  `;
+  const frames = streamFrames(window.webContents.mainFrame);
+  const results = await Promise.allSettled(frames.map((frame) => frame.executeJavaScript(script, true)));
+  const summary = results.map((result, index) => {
+    const frame = frames[index];
+    const value = result.status === 'fulfilled' ? result.value : `error:${result.reason instanceof Error ? result.reason.message : String(result.reason)}`;
+    return `${frame.url} => ${value}`;
+  });
+  await appendFile(join(app.getPath('userData'), 'renderer.log'), `${new Date().toISOString()} [audio] muted=${muted} volume=${clampedVolume} frames=${frames.length} ${summary.join(' | ')}\n`, 'utf8').catch(() => undefined);
+}
+
+function streamFrames(frame: WebFrameMain): WebFrameMain[] {
+  return frame.framesInSubtree.filter((candidate) => candidate.url.startsWith('http://127.0.0.1:1984/'));
 }

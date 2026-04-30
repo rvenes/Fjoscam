@@ -32,12 +32,12 @@ export class Go2RtcBridge {
     const streamName = safeStreamName(cameraId);
     void putStream(streamName, streamSource(camera)).catch((error) => logBridge(`put stream warning: ${error instanceof Error ? error.message : String(error)}`));
     await sleep(250);
-    await logBridge(`stream registered name=${streamName}`);
+    await logBridge(`stream registration requested name=${streamName}`);
     return {
       mode: 'webrtc',
       streamName,
       scriptUrl: `http://127.0.0.1:${API_PORT}/video-stream.js`,
-      pageUrl: `http://127.0.0.1:${API_PORT}/stream.html?src=${encodeURIComponent(streamName)}&mode=webrtc`,
+      pageUrl: streamPageUrl(streamName, camera.kind === 'generic'),
       wsUrl: `http://127.0.0.1:${API_PORT}/api/ws?src=${encodeURIComponent(streamName)}`,
     };
   }
@@ -111,7 +111,7 @@ async function writeConfig(): Promise<string> {
       `  listen: "127.0.0.1:${API_PORT}"`,
       'webrtc:',
       `  listen: "127.0.0.1:${WEBRTC_PORT}"`,
-      'streams: {}',
+      'streams:',
       '',
     ].join('\n'),
     'utf8',
@@ -189,6 +189,13 @@ function resolveGo2RtcPath(): string | undefined {
 
 function safeStreamName(value: string): string {
   return `fjoscam_${value.replace(/[^a-zA-Z0-9_-]/g, '_')}`;
+}
+
+function streamPageUrl(streamName: string, forceWebRtc: boolean): string {
+  const url = new URL(`http://127.0.0.1:${API_PORT}/stream.html`);
+  url.searchParams.set('src', streamName);
+  if (forceWebRtc) url.searchParams.set('mode', 'webrtc');
+  return url.toString();
 }
 
 function sleep(ms: number): Promise<void> {
