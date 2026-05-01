@@ -58,6 +58,9 @@ export default function App() {
   const [showAbout, setShowAbout] = useState(false);
   const [updateStatus, setUpdateStatus] = useState<UpdateStatus | null>(null);
   const [showUpdateDialog, setShowUpdateDialog] = useState(false);
+  const [showPresetDialog, setShowPresetDialog] = useState(false);
+  const [presetDraftId, setPresetDraftId] = useState(1);
+  const [presetDraftName, setPresetDraftName] = useState('Preset 1');
   const [speed, setSpeed] = useState(30);
   const [focusSpeed, setFocusSpeed] = useState(20);
   const [presets, setPresets] = useState<Preset[]>([]);
@@ -70,7 +73,7 @@ export default function App() {
   const [isStreamEnabled, setIsStreamEnabled] = useState(true);
   const [streamRevision, setStreamRevision] = useState(0);
   const [digitalZoom, setDigitalZoom] = useState(1);
-  const [opticalZoomLevel, setOpticalZoomLevel] = useState<1 | 2 | 3 | 4>(1);
+  const [opticalZoomPosition, setOpticalZoomPosition] = useState(0);
   const [audioMuted, setAudioMuted] = useState(true);
   const [audioVolume, setAudioVolume] = useState(60);
   const [digitalPan, setDigitalPan] = useState({ x: 0, y: 0 });
@@ -188,6 +191,24 @@ export default function App() {
         return;
       }
 
+      if (event.code === 'NumpadDivide') {
+        event.preventDefault();
+        if (!event.repeat && isReolinkCamera) void nudgeOpticalZoom(-5);
+        return;
+      }
+
+      if (event.code === 'NumpadMultiply') {
+        event.preventDefault();
+        if (!event.repeat && isReolinkCamera) void nudgeOpticalZoom(5);
+        return;
+      }
+
+      if (event.code === 'NumpadDecimal') {
+        event.preventDefault();
+        if (!event.repeat && activeCamera.kind !== 'panasonic') setAudioMuted((value) => !value);
+        return;
+      }
+
     }
 
     function handleKeyUp(event: KeyboardEvent) {
@@ -204,7 +225,7 @@ export default function App() {
       window.removeEventListener('keydown', handleKeyDown);
       window.removeEventListener('keyup', handleKeyUp);
     };
-  }, [activeCamera, presets, speed, state.cameras, viewerFullscreen]);
+  }, [activeCamera, isReolinkCamera, opticalZoomPosition, presets, speed, state.cameras, viewerFullscreen]);
 
   useEffect(() => {
     if (!activeCamera) {
@@ -237,6 +258,22 @@ export default function App() {
   useEffect(() => {
     applyWebRtcAudioSettings();
   }, [audioMuted, audioVolume, snapshotUrl]);
+
+  useEffect(() => {
+    if (!activeCamera || !isReolinkCamera) {
+      setOpticalZoomPosition(0);
+      return;
+    }
+    let cancelled = false;
+    window.fjoscam.getZoomFocus(activeCamera.id)
+      .then((value) => {
+        if (!cancelled && typeof value.zoom === 'number') setOpticalZoomPosition(clamp(value.zoom, 0, 34));
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [activeCamera?.id, isReolinkCamera]);
 
   async function loadCameraProfile(id: string) {
     const camera = state.cameras.find((item) => item.id === id);
@@ -529,7 +566,7 @@ export default function App() {
       protocol: camera.ports.https ? 'https' : 'http',
       httpPort,
       rtspPort: camera.ports.rtsp ?? 554,
-      username: isPanasonic ? 'codexc' : form.username,
+      username: isPanasonic && form.username === 'admin' ? '' : form.username,
       channel: 0,
       streamChannel: 0,
       mjpegPath: '/nphMotionJpeg?Resolution=640x480&Quality=Standard',
@@ -545,7 +582,7 @@ export default function App() {
       ...(kind === 'panasonic'
         ? {
             name: form.name || 'Panasonic',
-            username: form.username === 'admin' ? 'codexc' : form.username,
+            username: form.username === 'admin' ? '' : form.username,
             httpPort: form.httpPort || 80,
             rtspPort: form.rtspPort || 554,
             mjpegPath: form.mjpegPath || '/nphMotionJpeg?Resolution=640x480&Quality=Standard',
@@ -590,9 +627,14 @@ export default function App() {
     window.setTimeout(() => void send({ kind: 'stop' }), 180);
   }
 
-  async function setOpticalZoom(level: 1 | 2 | 3 | 4) {
-    setOpticalZoomLevel(level);
-    await send({ kind: 'zoomLevel', level });
+  async function setOpticalZoomPositionValue(position: number) {
+    const nextPosition = clamp(Math.round(position), 0, 34);
+    setOpticalZoomPosition(nextPosition);
+    await send({ kind: 'zoomPosition', position: nextPosition });
+  }
+
+  async function nudgeOpticalZoom(delta: number) {
+    await setOpticalZoomPositionValue(opticalZoomPosition + delta);
   }
 
   function changeFocus(value: number) {
@@ -611,6 +653,63 @@ export default function App() {
 
   function stopFocus() {
     void send({ kind: 'stop' });
+  }
+
+  async function saveCurrentPreset() {
+    if (!activeCamera || !isReolinkCamera) return;
+    const presetId = Number(presetDraftId);
+    if (!Number.isFinite(presetId) || presetId < 1 || presetId > 64) {
+      setMessage('Preset number must be between 1 and 64.');
+      setStatus({ ok: false, message: 'Preset number must be between 1 and 64.' });
+      return;
+    }
+
+    const name = presetDraftName.trim() || `Preset ${Math.round(presetId)}`;
+
+    setBusy(true);
+    setMessage('Saving preset...');
+    try {
+      const nextPresets = await window.fjoscam.savePreset(activeCamera.id, presetId, name);
+      setPresets(nextPresets);
+      setShowPresetDialog(false);
+      setStatus({ ok: true, message: `Saved preset ${Math.round(presetId)}` });
+      setMessage(`Saved preset ${Math.round(presetId)}`);
+    } catch (error) {
+      const message = errorMessage(error);
+      setStatus({ ok: false, message });
+      setMessage(message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function deletePreset(preset: Preset) {
+    if (!activeCamera || !isReolinkCamera) return;
+    const confirmed = window.confirm(`Delete "${preset.name}"?`);
+    if (!confirmed) return;
+
+    setBusy(true);
+    setMessage(`Deleting preset ${preset.id}...`);
+    try {
+      const nextPresets = await window.fjoscam.deletePreset(activeCamera.id, preset.id);
+      setPresets(nextPresets);
+      setStatus({ ok: true, message: `Deleted preset ${preset.id}` });
+      setMessage(`Deleted preset ${preset.id}`);
+    } catch (error) {
+      const message = errorMessage(error);
+      setStatus({ ok: false, message });
+      setMessage(message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function openPresetDialog() {
+    const suggestedId = nextPresetId(presets);
+    const existingPreset = presets.find((preset) => preset.id === suggestedId);
+    setPresetDraftId(suggestedId);
+    setPresetDraftName(existingPreset?.name ?? `Preset ${suggestedId}`);
+    setShowPresetDialog(true);
   }
 
   function startVideoPointer(event: MouseEvent<HTMLDivElement>) {
@@ -907,6 +1006,24 @@ export default function App() {
                   <input min="1" max="64" value={speed} type="range" onChange={(event) => setSpeed(Number(event.target.value))} />
                 </label>
 
+                {activeCamera && isReolinkCamera && (
+                  <label className="slider-label zoom-position-control">
+                    <span>Optical zoom</span>
+                    <strong>{zoomPositionLabel(opticalZoomPosition)}</strong>
+                    <input
+                      min="0"
+                      max="34"
+                      step="1"
+                      value={opticalZoomPosition}
+                      type="range"
+                      onChange={(event) => setOpticalZoomPosition(clamp(Number(event.target.value), 0, 34))}
+                      onMouseUp={(event) => void setOpticalZoomPositionValue(Number(event.currentTarget.value))}
+                      onTouchEnd={(event) => void setOpticalZoomPositionValue(Number(event.currentTarget.value))}
+                      onKeyUp={(event) => void setOpticalZoomPositionValue(Number(event.currentTarget.value))}
+                    />
+                  </label>
+                )}
+
                 <div className="quick-row">
                   <button disabled={!activeCamera} onClick={() => void zoomStep('out')} title="Zoom out">
                     <ZoomOut size={18} />
@@ -939,6 +1056,9 @@ export default function App() {
                   </button>
                   <button disabled={!activeCamera} onClick={() => void send({ kind: 'focus', direction: 'far', speed: focusSpeed })} title="Focus far">
                     <Eye size={18} />
+                  </button>
+                  <button disabled={!activeCamera || !isReolinkCamera || busy} onClick={openPresetDialog} title="Save current PTZ preset">
+                    Save preset
                   </button>
                 </div>
               </div>
@@ -1029,15 +1149,6 @@ export default function App() {
                 <button className={activeCamera.lowLatency ? 'selected' : ''} onClick={() => void setStreamQuality(true)}>Low</button>
               </div>
             )}
-            {activeCamera && isReolinkCamera && (
-              <div className="channel-switch zoom-switch" aria-label="Optical zoom">
-                {([1, 2, 3, 4] as const).map((zoom) => (
-                  <button key={zoom} className={opticalZoomLevel === zoom ? 'selected' : ''} onClick={() => void setOpticalZoom(zoom)}>
-                    {zoom}x
-                  </button>
-                ))}
-              </div>
-            )}
             <button onClick={() => void toggleStream()} disabled={!activeCamera || busy}>
               {busy ? <Loader2 className="spin" size={18} /> : isStreamEnabled ? <Pause size={18} /> : <Play size={18} />}
               {isStreamEnabled ? 'Disconnect' : 'Connect'}
@@ -1124,9 +1235,25 @@ export default function App() {
         <footer className="preset-bar">
           <div className="preset-list">
             {presets.map((preset) => (
-              <button key={preset.id} disabled={!activeCamera} onClick={() => void send({ kind: 'preset', presetId: preset.id })}>
-                {preset.name}
-              </button>
+              <span key={preset.id} className="preset-item">
+                <button className="preset-recall" disabled={!activeCamera} onClick={() => void send({ kind: 'preset', presetId: preset.id })}>
+                  {preset.name}
+                </button>
+                {cameraEditMode && isReolinkCamera && (
+                  <button
+                    className="preset-delete"
+                    disabled={!activeCamera || busy}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      void deletePreset(preset);
+                    }}
+                    title={`Delete ${preset.name}`}
+                    aria-label={`Delete ${preset.name}`}
+                  >
+                    <Trash2 size={16} />
+                  </button>
+                )}
+              </span>
             ))}
             {activeCamera && presets.length === 0 && <span className="hint">No presets loaded yet. Press Test/refresh.</span>}
           </div>
@@ -1150,7 +1277,9 @@ export default function App() {
           <span><kbd>←</kbd> <kbd>↑</kbd> <kbd>↓</kbd> <kbd>→</kbd>, <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd>, or the numpad moves PTZ cameras.</span>
           <span><kbd>1</kbd>-<kbd>9</kbd> recalls PTZ preset 1-9. <kbd>0</kbd> recalls preset 10.</span>
           <span><kbd>+</kbd> and <kbd>-</kbd> adjust PTZ speed.</span>
-          <span>1x, 2x, 3x, and 4x control optical zoom when the camera supports it.</span>
+          <span>Numpad <kbd>/</kbd> and <kbd>*</kbd> adjust optical zoom in larger steps.</span>
+          <span>Numpad <kbd>,</kbd> toggles camera audio mute.</span>
+          <span>The PTZ optical zoom slider sets the camera zoom position directly when supported.</span>
           <span><strong>MSE</strong> means Media Source Extensions. It is the browser player go2rtc often uses when audio compatibility is better than RTC.</span>
           <span><strong>RTC</strong> means WebRTC. It is usually the lowest-latency player.</span>
         </div>
@@ -1191,6 +1320,35 @@ export default function App() {
               </div>
             </section>
           </div>
+        </div>
+      )}
+
+      {showPresetDialog && (
+        <div className="modal-backdrop" onMouseDown={() => setShowPresetDialog(false)}>
+          <form
+            className="small-modal preset-modal"
+            onMouseDown={(event) => event.stopPropagation()}
+            onSubmit={(event) => {
+              event.preventDefault();
+              void saveCurrentPreset();
+            }}
+          >
+            <div className="modal-heading">
+              <h2>Save PTZ preset</h2>
+              <button type="button" className="icon-button" onClick={() => setShowPresetDialog(false)}>
+                ×
+              </button>
+            </div>
+            <p className="muted-text">Save the current camera position. Existing presets with the same number will be overwritten.</p>
+            <div className="form-grid preset-form">
+              <label>Preset number<input type="number" min="1" max="64" value={presetDraftId} onChange={(event) => setPresetDraftId(Number(event.target.value))} /></label>
+              <label>Preset name<input value={presetDraftName} onChange={(event) => setPresetDraftName(event.target.value)} /></label>
+            </div>
+            <div className="modal-actions">
+              <button type="button" onClick={() => setShowPresetDialog(false)}>Cancel</button>
+              <button type="submit" disabled={busy}>{busy ? 'Saving...' : 'Save preset'}</button>
+            </div>
+          </form>
         </div>
       )}
 
@@ -1366,6 +1524,10 @@ function cameraSubtitle(camera: CameraConfig, hasSecondaryLens: boolean): string
   return `${hasSecondaryLens ? ((camera.streamChannel ?? 0) === 1 ? 'Zoom lens' : 'Wide lens') : 'Camera'} · ${camera.lowLatency ? 'Low/Fluent' : 'High/Clear'}`;
 }
 
+function zoomPositionLabel(position: number): string {
+  return `${Math.round(clamp(position, 0, 34))}/34`;
+}
+
 function inferHostFromStreamUrl(value: string): string {
   try {
     return new URL(value).hostname;
@@ -1439,6 +1601,14 @@ function presetIndexFromKey(code: string): number | null {
   if (/^Digit[1-9]$/.test(code)) return Number(code.slice(5)) - 1;
   if (code === 'Digit0') return 9;
   return null;
+}
+
+function nextPresetId(presets: Preset[]): number {
+  const used = new Set(presets.map((preset) => preset.id));
+  for (let id = 1; id <= 64; id += 1) {
+    if (!used.has(id)) return id;
+  }
+  return 1;
 }
 
 function isEditableTarget(target: EventTarget | null): boolean {

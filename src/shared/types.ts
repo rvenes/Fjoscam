@@ -121,6 +121,7 @@ export type PtzCommand =
   | { kind: 'stop' }
   | { kind: 'zoom'; direction: 'in' | 'out'; speed: number }
   | { kind: 'zoomLevel'; level: 1 | 2 | 3 | 4 }
+  | { kind: 'zoomPosition'; position: number }
   | { kind: 'focus'; direction: 'near' | 'far'; speed: number }
   | { kind: 'preset'; presetId: number };
 

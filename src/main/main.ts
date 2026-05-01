@@ -20,6 +20,7 @@ const panasonic = new PanasonicClient();
 const cameraCache = new Map<string, CameraWithSecret>();
 const allowedExternalHosts = new Set(['github.com', 'www.github.com', 'paypal.com', 'www.paypal.com', 'venes.org', 'www.venes.org']);
 let isShuttingDown = false;
+let cameraEditMode = false;
 
 async function createWindow(): Promise<void> {
   const window = new BrowserWindow({
@@ -73,6 +74,8 @@ function createMenu(): void {
     window?.webContents.send('app:open-panel', panel);
   };
   const setCameraEditMode = (enabled: boolean): void => {
+    cameraEditMode = enabled;
+    createMenu();
     const window = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0];
     window?.webContents.send('app:camera-edit-mode', enabled);
   };
@@ -87,8 +90,10 @@ function createMenu(): void {
       submenu: [
         { label: 'Settings', accelerator: 'CmdOrCtrl+,', click: () => openRendererPanel('settings') },
         { type: 'separator' },
-        { label: 'Edit Camera List', click: () => setCameraEditMode(true) },
-        { label: 'Exit Camera Edit Mode', click: () => setCameraEditMode(false) },
+        {
+          label: cameraEditMode ? 'Exit camera edit mode' : 'Edit camera mode',
+          click: () => setCameraEditMode(!cameraEditMode),
+        },
         { type: 'separator' },
         { role: 'quit' },
       ],
@@ -254,6 +259,24 @@ function registerIpc(): void {
       return;
     }
     await reolink.sendPtz(camera, command);
+  });
+
+  ipcMain.handle('camera:get-zoom-focus', async (_event, id: string) => {
+    const camera = await getCachedCamera(id);
+    if (camera.kind !== 'reolink') return {};
+    return reolink.getZoomFocus(camera).catch(() => ({}));
+  });
+
+  ipcMain.handle('camera:save-preset', async (_event, id: string, presetId: number, name: string) => {
+    const camera = await getCachedCamera(id);
+    if (camera.kind !== 'reolink') return [];
+    return reolink.savePreset(camera, presetId, name);
+  });
+
+  ipcMain.handle('camera:delete-preset', async (_event, id: string, presetId: number) => {
+    const camera = await getCachedCamera(id);
+    if (camera.kind !== 'reolink') return [];
+    return reolink.deletePreset(camera, presetId);
   });
 
   ipcMain.handle('camera:get-snapshot-url', (_event, id: string) => snapshots.getSnapshotUrl(id));

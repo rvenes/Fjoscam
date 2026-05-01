@@ -58,13 +58,13 @@ npm run package
 Runnable app path:
 
 ```text
-H:\Koding\Fjoscam\dist\win-unpacked\Fjoscam.exe
+<repo-root>\dist\win-unpacked\Fjoscam.exe
 ```
 
 If build/package fails with `EPERM` on `dist\win-unpacked`, Fjoscam or `go2rtc` is probably still running from that folder. Check and stop only those processes:
 
 ```powershell
-Get-Process | Where-Object { $_.ProcessName -in @('Fjoscam','go2rtc') -and $_.Path -like 'H:\Koding\Fjoscam\dist\win-unpacked\*' }
+Get-Process | Where-Object { $_.ProcessName -in @('Fjoscam','go2rtc') -and $_.Path -like '*\dist\win-unpacked\*' }
 ```
 
 ## Release / Auto Update
@@ -109,7 +109,7 @@ https://venes.org/fjoscam/latest.yml
 
 - `npm run package` creates/updates `dist\win-unpacked`, useful for local testing.
 - `npm run dist` creates installer/update files in `dist\`.
-- Do not delete older stable folders such as `H:\Koding\Fjoscam-stable-*` unless asked.
+- Do not delete older stable folders unless asked.
 - Keep Windows working when adding macOS support later. macOS auto-update/signing is separate work and must not break Windows NSIS updates.
 
 ## Logs
@@ -117,7 +117,7 @@ https://venes.org/fjoscam/latest.yml
 Useful local logs are under:
 
 ```text
-C:\Users\rune\AppData\Roaming\fjoscam\
+%APPDATA%\fjoscam\
 ```
 
 Common logs:
@@ -131,7 +131,7 @@ renderer.log
 Camera config is local user data, not included in installer builds:
 
 ```text
-C:\Users\rune\AppData\Roaming\fjoscam\cameras.json
+%APPDATA%\fjoscam\cameras.json
 ```
 
 Secrets are encrypted with Electron `safeStorage`.

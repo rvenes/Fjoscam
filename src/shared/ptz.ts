@@ -9,6 +9,7 @@ export function commandToReolinkOp(command: PtzCommand): string {
     case 'zoom':
       return command.direction === 'in' ? 'ZoomInc' : 'ZoomDec';
     case 'zoomLevel':
+    case 'zoomPosition':
       return 'ZoomPos';
     case 'focus':
       return command.direction === 'near' ? 'FocusDec' : 'FocusInc';

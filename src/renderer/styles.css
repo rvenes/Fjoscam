@@ -399,6 +399,17 @@ button:disabled {
   accent-color: #58a6ff;
 }
 
+.zoom-position-control {
+  padding: 10px;
+  border: 1px solid #3e4848;
+  border-radius: 6px;
+  background: #202424;
+}
+
+.zoom-position-control strong {
+  color: #f4f9f8;
+}
+
 .quick-row {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
@@ -614,9 +625,36 @@ button:disabled {
   overflow-x: auto;
 }
 
+.preset-item {
+  display: inline-flex;
+  flex: 0 0 auto;
+  overflow: hidden;
+  border-radius: 6px;
+  flex: 0 0 auto;
+  background: #4a5459;
+}
+
 .preset-list button {
   flex: 0 0 auto;
   background: #4a5459;
+}
+
+.preset-item .preset-recall {
+  border-radius: 0;
+  background: transparent;
+}
+
+.preset-item .preset-delete {
+  min-width: 38px;
+  padding: 0 10px;
+  border-left: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 0;
+  color: #ffb4b4;
+  background: #5a3838;
+}
+
+.preset-item .preset-delete:hover {
+  background: #744444;
 }
 
 .stream-detail {

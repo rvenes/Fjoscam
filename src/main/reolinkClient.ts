@@ -137,6 +137,51 @@ export class ReolinkClient {
       .sort((a, b) => a.id - b.id);
   }
 
+  async savePreset(camera: CameraWithSecret, presetId: number, name: string): Promise<Preset[]> {
+    const token = await this.getToken(camera);
+    const id = clampPresetId(presetId);
+    await this.postWithTokenRetry(
+      camera,
+      [{
+        cmd: 'SetPtzPreset',
+        action: 0,
+        param: {
+          PtzPreset: {
+            channel: camera.channel,
+            enable: 1,
+            id,
+            name: sanitizePresetName(name),
+          },
+        },
+      }],
+      token,
+    );
+    return this.getPresets(camera, token);
+  }
+
+  async deletePreset(camera: CameraWithSecret, presetId: number): Promise<Preset[]> {
+    const token = await this.getToken(camera);
+    const id = clampPresetId(presetId);
+    await this.postWithTokenRetry(
+      camera,
+      [{
+        cmd: 'SetPtzPreset',
+        action: 0,
+        param: {
+          PtzPreset: {
+            channel: camera.channel,
+            enable: 0,
+            id,
+            name: '',
+          },
+        },
+      }],
+      token,
+    );
+    return this.getPresets(camera, token);
+  }
+
+
   async getCameraName(camera: CameraWithSecret, token?: string): Promise<string | undefined> {
     const info = await this.getDeviceInfo(camera, token);
     return (info.name || info.model)?.trim() || undefined;
@@ -214,6 +259,10 @@ export class ReolinkClient {
   async sendPtz(camera: CameraWithSecret, command: PtzCommand): Promise<void> {
     if (command.kind === 'zoomLevel') {
       await this.startZoomFocus(camera, 'ZoomPos', zoomLevelPosition(command.level));
+      return;
+    }
+    if (command.kind === 'zoomPosition') {
+      await this.startZoomFocus(camera, 'ZoomPos', clampZoomPosition(command.position));
       return;
     }
 
@@ -498,6 +547,19 @@ function zoomLevelPosition(level: 1 | 2 | 3 | 4): number {
     case 4:
       return 34;
   }
+}
+
+function clampZoomPosition(position: number): number {
+  return Math.max(0, Math.min(34, Math.round(position)));
+}
+
+function clampPresetId(id: number): number {
+  return Math.max(1, Math.min(64, Math.round(id)));
+}
+
+function sanitizePresetName(name: string): string {
+  const value = name.trim();
+  return (value || 'Preset').slice(0, 31);
 }
 
 function sessionKey(camera: CameraWithSecret): string {
