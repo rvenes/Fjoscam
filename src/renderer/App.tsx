@@ -804,8 +804,14 @@ export default function App() {
       return;
     }
 
-    const originX = ((event.clientX - bounds.left) / bounds.width) * 100;
-    const originY = ((event.clientY - bounds.top) / bounds.height) * 100;
+    const cursor = {
+      x: event.clientX - bounds.left,
+      y: event.clientY - bounds.top,
+    };
+    const origin = {
+      x: (digitalOrigin.x / 100) * bounds.width,
+      y: (digitalOrigin.y / 100) * bounds.height,
+    };
     const nextZoom = clamp(digitalZoom + (event.deltaY < 0 ? 0.18 : -0.18), 1, 4);
 
     if (nextZoom === 1) {
@@ -813,9 +819,17 @@ export default function App() {
       return;
     }
 
+    const imagePoint = {
+      x: (cursor.x - digitalPan.x - (1 - digitalZoom) * origin.x) / digitalZoom,
+      y: (cursor.y - digitalPan.y - (1 - digitalZoom) * origin.y) / digitalZoom,
+    };
+    const nextPan = {
+      x: cursor.x - nextZoom * imagePoint.x - (1 - nextZoom) * origin.x,
+      y: cursor.y - nextZoom * imagePoint.y - (1 - nextZoom) * origin.y,
+    };
+
     setDigitalZoom(nextZoom);
-    setDigitalOrigin({ x: clamp(originX, 0, 100), y: clamp(originY, 0, 100) });
-    setDigitalPan((current) => clampPan(current, nextZoom, bounds));
+    setDigitalPan(clampPan(nextPan, nextZoom, bounds));
   }
 
   function setDigitalZoomLevel(nextZoom: number) {
