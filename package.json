@@ -21,7 +21,7 @@
     "appId": "no.fjoscam.viewer",
     "productName": "Fjoscam",
     "files": [
-      "dist/**",
+      "dist-renderer/**",
       "dist-electron/**",
       "vendor/go2rtc/**",
       "package.json"

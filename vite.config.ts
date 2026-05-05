@@ -9,13 +9,13 @@ export default defineConfig({
     strictPort: true,
   },
   build: {
-    outDir: 'dist',
+    outDir: 'dist-renderer',
     emptyOutDir: true,
   },
   test: {
     environment: 'jsdom',
     globals: true,
     setupFiles: './src/test/setup.ts',
-    exclude: ['node_modules/**', 'dist/**', 'dist-electron/**'],
+    exclude: ['node_modules/**', 'dist/**', 'dist-renderer/**', 'dist-electron/**'],
   },
 });
