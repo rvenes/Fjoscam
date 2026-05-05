@@ -54,7 +54,7 @@ async function createWindow(): Promise<void> {
   });
 
   if (isDev) await window.loadURL('http://127.0.0.1:5173');
-  else await window.loadFile(join(__dirname, '../../dist/index.html'));
+  else await window.loadFile(join(__dirname, '../../dist-renderer/index.html'));
 }
 
 app.whenReady().then(async () => {
