@@ -1,9 +1,10 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { appendFile, mkdir, writeFile } from 'node:fs/promises';
+import { mkdir, writeFile } from 'node:fs/promises';
 import { request as httpRequest } from 'node:http';
 import { app } from 'electron';
 import { join } from 'node:path';
+import { logToFile } from './logging.js';
 import type { CameraStore } from './store.js';
 import { buildRtspUrl } from './reolinkClient.js';
 import type { CameraWithSecret } from '../shared/types.js';
@@ -204,7 +205,7 @@ function sleep(ms: number): Promise<void> {
 
 async function logBridge(message: string): Promise<void> {
   if (!message) return;
-  await appendFile(join(app.getPath('userData'), 'go2rtc-bridge.log'), `${new Date().toISOString()} ${sanitizeLogMessage(message)}\n`, 'utf8').catch(() => undefined);
+  await logToFile('go2rtc-bridge.log', sanitizeLogMessage(message));
 }
 
 function sanitizeLogMessage(value: string): string {

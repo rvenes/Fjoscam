@@ -1,8 +1,8 @@
 import { FormEvent, MouseEvent, WheelEvent, useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { ArrowDown, ArrowDownLeft, ArrowDownRight, ArrowLeft, ArrowRight, ArrowUp, ArrowUpLeft, ArrowUpRight, Camera, CheckCircle2, Crosshair, Eye, Focus, Loader2, Pause, Play, Plus, Radio, RotateCcw, Trash2, Volume2, VolumeX, WifiOff, ZoomIn, ZoomOut } from 'lucide-react';
-import type { AppState, CameraConfig, CameraDiscoveryResult, CameraInput, CameraProfile, ConnectionStatus, IrLightMode, Preset, PtzCommand, PtzDirection, StreamInfo, UpdateStatus, WhiteLedState } from '../shared/types';
-import { clickToPtzCommand } from '../shared/ptz';
+import type { AppState, CameraConfig, CameraDiscoveryResult, CameraInput, CameraProfile, ConnectionStatus, IrLightMode, IrLightsInfo, Preset, PtzCommand, PtzDirection, StreamInfo, UpdateStatus, WhiteLedState, ZoomFocusState, ZoomRange } from '../shared/types';
+import { clickToPtzCommand, presetForKey, presetIdFromKey, zoomNudgeStep } from '../shared/ptz';
 import './styles.css';
 
 const defaultInput: CameraInput = {
@@ -32,6 +32,9 @@ const directions: Array<{ direction: PtzDirection; Icon: typeof ArrowUp; classNa
   { direction: 'Down', Icon: ArrowDown, className: 'dir-down' },
   { direction: 'RightDown', Icon: ArrowDownRight, className: 'dir-right-down' },
 ];
+
+// Fallback until the camera has reported its own range via GetZoomFocus.
+const defaultZoomRange: ZoomRange = { min: 0, max: 34 };
 
 const clickZones = [
   ['↖', '↖', '↑', '↗', '↗'],
@@ -66,7 +69,7 @@ export default function App() {
   const [presets, setPresets] = useState<Preset[]>([]);
   const [streamInfo, setStreamInfo] = useState<{ high?: StreamInfo; low?: StreamInfo }>({});
   const [profile, setProfile] = useState<CameraProfile | undefined>();
-  const [irMode, setIrMode] = useState<IrLightMode | undefined>();
+  const [irLights, setIrLights] = useState<IrLightsInfo | undefined>();
   const [whiteLed, setWhiteLed] = useState<WhiteLedState | undefined>();
   const [snapshotUrl, setSnapshotUrl] = useState('');
   const [fallbackUrl, setFallbackUrl] = useState('');
@@ -74,6 +77,7 @@ export default function App() {
   const [streamRevision, setStreamRevision] = useState(0);
   const [digitalZoom, setDigitalZoom] = useState(1);
   const [opticalZoomPosition, setOpticalZoomPosition] = useState(0);
+  const [zoomRange, setZoomRange] = useState<ZoomRange>(defaultZoomRange);
   const [audioMuted, setAudioMuted] = useState(true);
   const [audioVolume, setAudioVolume] = useState(60);
   const [digitalPan, setDigitalPan] = useState({ x: 0, y: 0 });
@@ -92,6 +96,12 @@ export default function App() {
     panY: number;
   } | null>(null);
   const runtimeLoadRef = useRef(0);
+  const zoomTargetRef = useRef<number | null>(null);
+  const zoomSendTimerRef = useRef<number | null>(null);
+  const zoomBusyRef = useRef(false);
+  const zoomInteractionRef = useRef(0);
+  const zoomHoldRef = useRef(false);
+  const activeCameraIdRef = useRef<string | null>(null);
   const [status, setStatus] = useState<ConnectionStatus | null>(null);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState('');
@@ -100,9 +110,10 @@ export default function App() {
     () => state.cameras.find((camera) => camera.id === state.activeCameraId) ?? null,
     [state],
   );
+  activeCameraIdRef.current = activeCamera?.id ?? null;
   const existingCameraHosts = useMemo(() => new Set(state.cameras.map((camera) => camera.host).filter(Boolean)), [state.cameras]);
   const isReolinkCamera = !activeCamera?.kind || activeCamera.kind === 'reolink';
-  const hasSecondaryLens = activeCamera ? supportsSecondaryLens(activeCamera) : false;
+  const hasSecondaryLens = activeCamera ? supportsSecondaryLens(activeCamera, profile) : false;
 
   useEffect(() => {
     void refresh();
@@ -157,10 +168,9 @@ export default function App() {
 
       if (!activeCamera) return;
 
-      const presetIndex = presetIndexFromKey(event.code);
-      if (presetIndex !== null) {
+      if (presetIdFromKey(event.code) !== null) {
         event.preventDefault();
-        const preset = presets[presetIndex];
+        const preset = presetForKey(event.code, presets);
         if (!event.repeat && preset) void send({ kind: 'preset', presetId: preset.id });
         return;
       }
@@ -193,13 +203,13 @@ export default function App() {
 
       if (event.code === 'NumpadDivide') {
         event.preventDefault();
-        if (!event.repeat && isReolinkCamera) void nudgeOpticalZoom(-5);
+        if (!event.repeat && isReolinkCamera) nudgeOpticalZoom(-1);
         return;
       }
 
       if (event.code === 'NumpadMultiply') {
         event.preventDefault();
-        if (!event.repeat && isReolinkCamera) void nudgeOpticalZoom(5);
+        if (!event.repeat && isReolinkCamera) nudgeOpticalZoom(1);
         return;
       }
 
@@ -225,14 +235,14 @@ export default function App() {
       window.removeEventListener('keydown', handleKeyDown);
       window.removeEventListener('keyup', handleKeyUp);
     };
-  }, [activeCamera, isReolinkCamera, opticalZoomPosition, presets, speed, state.cameras, viewerFullscreen]);
+  }, [activeCamera, isReolinkCamera, opticalZoomPosition, presets, speed, state.cameras, viewerFullscreen, zoomRange]);
 
   useEffect(() => {
     if (!activeCamera) {
       setPresets([]);
       setStreamInfo({});
       setProfile(undefined);
-      setIrMode(undefined);
+      setIrLights(undefined);
       setWhiteLed(undefined);
       setSnapshotUrl('');
       setFallbackUrl('');
@@ -259,19 +269,34 @@ export default function App() {
     applyWebRtcAudioSettings();
   }, [audioMuted, audioVolume, snapshotUrl]);
 
+  // Keeps the optical zoom position and range in sync with the camera. TrackMix
+  // cameras change zoom on their own (auto tracking), so light polling is needed
+  // for the slider and keyboard nudges to work from the camera's real position.
   useEffect(() => {
+    zoomTargetRef.current = null;
+    zoomInteractionRef.current = 0;
     if (!activeCamera || !isReolinkCamera) {
       setOpticalZoomPosition(0);
+      setZoomRange(defaultZoomRange);
       return;
     }
     let cancelled = false;
-    window.fjoscam.getZoomFocus(activeCamera.id)
-      .then((value) => {
-        if (!cancelled && typeof value.zoom === 'number') setOpticalZoomPosition(clamp(value.zoom, 0, 34));
-      })
-      .catch(() => undefined);
+    const cameraId = activeCamera.id;
+    const refresh = () => {
+      if (zoomBusyRef.current || zoomTargetRef.current !== null) return;
+      if (Date.now() - zoomInteractionRef.current < 1500) return;
+      window.fjoscam.getZoomFocus(cameraId)
+        .then((value) => {
+          if (cancelled || zoomBusyRef.current || zoomTargetRef.current !== null) return;
+          applyZoomState(value);
+        })
+        .catch(() => undefined);
+    };
+    refresh();
+    const timer = window.setInterval(refresh, 3000);
     return () => {
       cancelled = true;
+      window.clearInterval(timer);
     };
   }, [activeCamera?.id, isReolinkCamera]);
 
@@ -279,14 +304,14 @@ export default function App() {
     const camera = state.cameras.find((item) => item.id === id);
     if (camera?.kind !== 'reolink') {
       setProfile(undefined);
-      setIrMode(undefined);
+      setIrLights(undefined);
       setWhiteLed(undefined);
       return;
     }
     const nextProfile = await window.fjoscam.getProfile(id);
     setProfile(nextProfile);
-    if (nextProfile?.capabilities.irLights) setIrMode(await window.fjoscam.getIrLights(id));
-    else setIrMode(undefined);
+    if (nextProfile?.capabilities.irLights) setIrLights(await window.fjoscam.getIrLights(id));
+    else setIrLights(undefined);
     setWhiteLed(await window.fjoscam.getWhiteLed(id));
   }
 
@@ -418,6 +443,8 @@ export default function App() {
     setState(nextState);
     resetDigitalZoom();
     if (isStreamEnabled) window.setTimeout(() => void loadWebRtcRuntime(activeCamera.id), 120);
+    // The tele lens starts fully zoomed in for maximum magnification.
+    if (channel === 1 && isReolinkCamera) zoomToMax();
   }
 
   async function setStreamQuality(lowLatency: boolean) {
@@ -493,20 +520,34 @@ export default function App() {
     setMessage('Updating IR lights...');
     try {
       await window.fjoscam.setIrLights(activeCamera.id, mode);
-      setIrMode(mode);
+      setIrLights((current) => (current ? { ...current, mode } : { mode, options: ['auto', 'on', 'off'] }));
       setMessage('IR lights updated');
     } catch (error) {
       setMessage(errorMessage(error));
     }
   }
 
-  async function setCameraLight(enabled: boolean, brightness = whiteLed?.brightness) {
+  // Spotlight behaviour: 0 = off (IR night vision takes over), 1 = auto at
+  // night on detection, 3 = the camera's own schedule.
+  async function setCameraLightMode(mode: 0 | 1 | 3) {
     if (!activeCamera) return;
-    const nextBrightness = enabled ? (brightness && brightness > 0 ? brightness : 85) : 0;
     setMessage('Updating spotlight...');
     try {
-      await window.fjoscam.setWhiteLed(activeCamera.id, enabled, nextBrightness);
-      setWhiteLed({ ...whiteLed, enabled, brightness: nextBrightness });
+      await window.fjoscam.setWhiteLed(activeCamera.id, { mode });
+      setWhiteLed({ ...whiteLed, enabled: mode !== 0, mode });
+      setMessage(mode === 0 ? 'Spotlight off - IR night vision active' : mode === 1 ? 'Spotlight auto (motion at night)' : 'Spotlight on camera schedule');
+    } catch (error) {
+      setMessage(errorMessage(error));
+    }
+  }
+
+  async function setLegacyCameraLight(enabled: boolean) {
+    if (!activeCamera) return;
+    const brightness = enabled ? (whiteLed?.brightness && whiteLed.brightness > 0 ? whiteLed.brightness : 85) : 0;
+    setMessage('Updating spotlight...');
+    try {
+      await window.fjoscam.setWhiteLed(activeCamera.id, { enabled, brightness });
+      setWhiteLed({ ...whiteLed, enabled, brightness });
       setMessage(enabled ? 'Spotlight on' : 'Spotlight off');
     } catch (error) {
       setMessage(errorMessage(error));
@@ -515,10 +556,9 @@ export default function App() {
 
   async function setCameraLightBrightness(brightness: number) {
     if (!activeCamera) return;
-    const enabled = brightness > 0;
-    setWhiteLed({ ...whiteLed, enabled, brightness, supportsBrightness: true });
+    setWhiteLed({ ...whiteLed, enabled: (whiteLed?.mode ?? 0) !== 0, brightness, supportsBrightness: true });
     try {
-      await window.fjoscam.setWhiteLed(activeCamera.id, enabled, brightness);
+      await window.fjoscam.setWhiteLed(activeCamera.id, { brightness });
       setMessage(`Spotlight brightness ${brightness}%`);
     } catch (error) {
       setMessage(errorMessage(error));
@@ -557,7 +597,7 @@ export default function App() {
 
   function useDiscoveredCamera(camera: CameraDiscoveryResult) {
     const httpPort = camera.ports.https ?? camera.ports.http ?? 80;
-    const isPanasonic = camera.host === '10.0.0.83';
+    const isPanasonic = /panasonic/i.test([camera.manufacturer, camera.model, camera.name].filter(Boolean).join(' '));
     setForm({
       ...form,
       kind: isPanasonic ? 'panasonic' : 'reolink',
@@ -617,24 +657,87 @@ export default function App() {
     if (!activeCamera || activeCamera.kind === 'generic') return;
     try {
       await window.fjoscam.sendPtz(activeCamera.id, command);
+      // Preset recall usually moves the optical zoom as well.
+      if (command.kind === 'preset' && isReolinkCamera) scheduleZoomRefresh(2500);
     } catch (error) {
       setMessage(errorMessage(error));
     }
   }
 
-  async function zoomStep(direction: 'in' | 'out') {
-    await send({ kind: 'zoom', direction, speed });
-    window.setTimeout(() => void send({ kind: 'stop' }), 180);
+  function startZoomHold(direction: 'in' | 'out') {
+    zoomHoldRef.current = true;
+    void send({ kind: 'zoom', direction, speed });
   }
 
-  async function setOpticalZoomPositionValue(position: number) {
-    const nextPosition = clamp(Math.round(position), 0, 34);
-    setOpticalZoomPosition(nextPosition);
-    await send({ kind: 'zoomPosition', position: nextPosition });
+  function stopZoomHold() {
+    if (!zoomHoldRef.current) return;
+    zoomHoldRef.current = false;
+    void send({ kind: 'stop' });
+    scheduleZoomRefresh(600);
   }
 
-  async function nudgeOpticalZoom(delta: number) {
-    await setOpticalZoomPositionValue(opticalZoomPosition + delta);
+  function applyZoomState(state: ZoomFocusState) {
+    if (typeof state.zoom === 'number') setOpticalZoomPosition(state.zoom);
+    if (state.zoomRange) setZoomRange(state.zoomRange);
+  }
+
+  // Queues an absolute optical zoom position. Sends are debounced so slider drags
+  // and repeated key presses collapse into one camera command. The raw target is
+  // sent unclamped: the main process clamps against the camera's real range, so a
+  // stale local range can never zoom the wrong way.
+  function queueZoomPosition(position: number) {
+    if (!activeCamera || !isReolinkCamera) return;
+    const target = Math.round(position);
+    zoomTargetRef.current = target;
+    zoomInteractionRef.current = Date.now();
+    setOpticalZoomPosition(clamp(target, zoomRange.min, zoomRange.max));
+    if (zoomSendTimerRef.current !== null) window.clearTimeout(zoomSendTimerRef.current);
+    zoomSendTimerRef.current = window.setTimeout(() => void flushZoomPosition(), 200);
+  }
+
+  async function flushZoomPosition() {
+    if (zoomBusyRef.current) return;
+    const target = zoomTargetRef.current;
+    const cameraId = activeCameraIdRef.current;
+    if (target === null || cameraId === null) return;
+    zoomTargetRef.current = null;
+    zoomBusyRef.current = true;
+    try {
+      const result = await window.fjoscam.setZoomPosition(cameraId, target);
+      if (zoomTargetRef.current === null && activeCameraIdRef.current === cameraId) {
+        applyZoomState(result);
+      }
+    } catch (error) {
+      setMessage(errorMessage(error));
+    } finally {
+      zoomBusyRef.current = false;
+      if (zoomTargetRef.current !== null) void flushZoomPosition();
+    }
+  }
+
+  function nudgeOpticalZoom(direction: -1 | 1) {
+    const base = zoomTargetRef.current ?? opticalZoomPosition;
+    queueZoomPosition(base + direction * zoomNudgeStep(zoomRange));
+  }
+
+  function zoomToMax() {
+    // The main process clamps to the camera's true maximum.
+    queueZoomPosition(Number.MAX_SAFE_INTEGER);
+  }
+
+  function scheduleZoomRefresh(delayMs: number) {
+    const cameraId = activeCameraIdRef.current;
+    if (!cameraId || !isReolinkCamera) return;
+    window.setTimeout(() => {
+      if (activeCameraIdRef.current !== cameraId) return;
+      window.fjoscam.getZoomFocus(cameraId)
+        .then((state) => {
+          if (activeCameraIdRef.current !== cameraId) return;
+          if (zoomBusyRef.current || zoomTargetRef.current !== null) return;
+          applyZoomState(state);
+        })
+        .catch(() => undefined);
+    }, delayMs);
   }
 
   function changeFocus(value: number) {
@@ -1023,26 +1126,35 @@ export default function App() {
                 {activeCamera && isReolinkCamera && (
                   <label className="slider-label zoom-position-control">
                     <span>Optical zoom</span>
-                    <strong>{zoomPositionLabel(opticalZoomPosition)}</strong>
+                    <strong>{zoomPositionLabel(opticalZoomPosition, zoomRange)}</strong>
                     <input
-                      min="0"
-                      max="34"
+                      min={zoomRange.min}
+                      max={zoomRange.max}
                       step="1"
-                      value={opticalZoomPosition}
+                      value={clamp(opticalZoomPosition, zoomRange.min, zoomRange.max)}
                       type="range"
-                      onChange={(event) => setOpticalZoomPosition(clamp(Number(event.target.value), 0, 34))}
-                      onMouseUp={(event) => void setOpticalZoomPositionValue(Number(event.currentTarget.value))}
-                      onTouchEnd={(event) => void setOpticalZoomPositionValue(Number(event.currentTarget.value))}
-                      onKeyUp={(event) => void setOpticalZoomPositionValue(Number(event.currentTarget.value))}
+                      onChange={(event) => queueZoomPosition(Number(event.target.value))}
                     />
                   </label>
                 )}
 
                 <div className="quick-row">
-                  <button disabled={!activeCamera} onClick={() => void zoomStep('out')} title="Zoom out">
+                  <button
+                    disabled={!activeCamera}
+                    onMouseDown={() => startZoomHold('out')}
+                    onMouseUp={stopZoomHold}
+                    onMouseLeave={stopZoomHold}
+                    title="Zoom out (hold)"
+                  >
                     <ZoomOut size={18} />
                   </button>
-                  <button disabled={!activeCamera} onClick={() => void zoomStep('in')} title="Zoom in">
+                  <button
+                    disabled={!activeCamera}
+                    onMouseDown={() => startZoomHold('in')}
+                    onMouseUp={stopZoomHold}
+                    onMouseLeave={stopZoomHold}
+                    title="Zoom in (hold)"
+                  >
                     <ZoomIn size={18} />
                   </button>
                   <button disabled={!activeCamera} onClick={() => void testCamera()} title="Refresh presets">
@@ -1094,27 +1206,43 @@ export default function App() {
               {profile.channels.length > 0 && <span>{profile.channels.filter((channel) => channel.online).length}/{profile.channels.length} channels online</span>}
             </div>
 
-            {profile.capabilities.irLights && (
+            {profile.capabilities.irLights && irLights && (
               <label className="control-row">
                 <span>IR</span>
-                <select value={irMode ?? 'auto'} onChange={(event) => void changeIrMode(event.target.value as IrLightMode)}>
-                  <option value="auto">Auto</option>
-                  <option value="on">On</option>
-                  <option value="off">Off</option>
+                <select value={irLights.mode ?? 'auto'} onChange={(event) => void changeIrMode(event.target.value as IrLightMode)}>
+                  {irLights.options.map((option) => (
+                    <option key={option} value={option}>
+                      {irOptionLabel(option)}
+                    </option>
+                  ))}
                 </select>
               </label>
             )}
 
             {whiteLed && (
               <div className="light-controls">
-                <div className="segmented-control">
-                  <button className={whiteLed.enabled ? 'selected' : ''} onClick={() => void setCameraLight(true)}>
-                    Light on
-                  </button>
-                  <button className={!whiteLed.enabled ? 'selected' : ''} onClick={() => void setCameraLight(false)}>
-                    Off
-                  </button>
-                </div>
+                {whiteLed.supportsModes ? (
+                  <div className="segmented-control" aria-label="Spotlight mode">
+                    <button className={whiteLed.mode === 0 ? 'selected' : ''} onClick={() => void setCameraLightMode(0)}>
+                      Off
+                    </button>
+                    <button className={whiteLed.mode === 1 ? 'selected' : ''} onClick={() => void setCameraLightMode(1)}>
+                      Auto
+                    </button>
+                    <button className={whiteLed.mode === 3 ? 'selected' : ''} onClick={() => void setCameraLightMode(3)}>
+                      Schedule
+                    </button>
+                  </div>
+                ) : (
+                  <div className="segmented-control" aria-label="Spotlight">
+                    <button className={whiteLed.enabled ? 'selected' : ''} onClick={() => void setLegacyCameraLight(true)}>
+                      Light on
+                    </button>
+                    <button className={!whiteLed.enabled ? 'selected' : ''} onClick={() => void setLegacyCameraLight(false)}>
+                      Off
+                    </button>
+                  </div>
+                )}
                 {whiteLed.supportsBrightness && (
                   <label className="slider-label">
                     <span>Light</span>
@@ -1128,7 +1256,11 @@ export default function App() {
                     />
                   </label>
                 )}
-                <small className="control-hint">Some cameras require an admin user to change the light.</small>
+                <small className="control-hint">
+                  {whiteLed.supportsModes
+                    ? "Off keeps the spotlight dark so IR night vision works. Auto turns it on at motion during night. Schedule follows the camera's own timer."
+                    : 'Some cameras require an admin user to change the light.'}
+                </small>
               </div>
             )}
 
@@ -1499,6 +1631,17 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+function irOptionLabel(mode: IrLightMode): string {
+  switch (mode) {
+    case 'auto':
+      return 'Auto';
+    case 'on':
+      return 'On';
+    case 'off':
+      return 'Off';
+  }
+}
+
 function updateMessage(status: UpdateStatus): string {
   switch (status.state) {
     case 'idle':
@@ -1538,8 +1681,11 @@ function cameraSubtitle(camera: CameraConfig, hasSecondaryLens: boolean): string
   return `${hasSecondaryLens ? ((camera.streamChannel ?? 0) === 1 ? 'Zoom lens' : 'Wide lens') : 'Camera'} · ${camera.lowLatency ? 'Low/Fluent' : 'High/Clear'}`;
 }
 
-function zoomPositionLabel(position: number): string {
-  return `${Math.round(clamp(position, 0, 34))}/34`;
+function zoomPositionLabel(position: number, range: ZoomRange): string {
+  const span = range.max - range.min;
+  if (span <= 0) return '0%';
+  const percent = Math.round((clamp(position, range.min, range.max) - range.min) / span * 100);
+  return `${percent}%`;
 }
 
 function inferHostFromStreamUrl(value: string): string {
@@ -1611,12 +1757,6 @@ function numpadDirection(code: string): PtzDirection | null {
   }
 }
 
-function presetIndexFromKey(code: string): number | null {
-  if (/^Digit[1-9]$/.test(code)) return Number(code.slice(5)) - 1;
-  if (code === 'Digit0') return 9;
-  return null;
-}
-
 function nextPresetId(presets: Preset[]): number {
   const used = new Set(presets.map((preset) => preset.id));
   for (let id = 1; id <= 64; id += 1) {
@@ -1631,9 +1771,10 @@ function isEditableTarget(target: EventTarget | null): boolean {
   return tag === 'input' || tag === 'textarea' || tag === 'select' || target.isContentEditable;
 }
 
-function supportsSecondaryLens(camera: CameraConfig): boolean {
+function supportsSecondaryLens(camera: CameraConfig, profile?: CameraProfile): boolean {
   if ((camera.streamChannel ?? 0) > 0) return true;
-  return /trackmix|dual|rv heima/i.test(camera.name);
+  if (profile?.device?.model && /trackmix/i.test(profile.device.model)) return true;
+  return /trackmix|dual/i.test(camera.name);
 }
 
 function formatStreamInfo(info?: StreamInfo): string {

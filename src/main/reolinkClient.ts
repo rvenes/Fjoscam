@@ -6,11 +6,14 @@ import type {
   CameraWithSecret,
   ConnectionStatus,
   IrLightMode,
+  IrLightsInfo,
   Preset,
   PtzCommand,
   SirenConfig,
   StreamInfo,
   WhiteLedState,
+  ZoomFocusState,
+  ZoomRange,
 } from '../shared/types.js';
 import { commandToReolinkOp } from '../shared/ptz.js';
 import { requestBinary, requestJson } from './request.js';
@@ -20,6 +23,8 @@ type ReolinkEnvelope<T = unknown> = Array<{
   cmd: string;
   code: number;
   value?: T;
+  range?: T;
+  initial?: T;
   error?: { detail?: string; rspCode?: number };
 }>;
 
@@ -62,17 +67,19 @@ type RawStreamInfo = {
   width?: number;
 };
 
+// `value.pos` is a number; `range.pos` is a { min, max } object (action: 1).
 type ZoomFocusResponse = {
   ZoomFocus?: {
     channel?: number;
-    focus?: { pos?: number };
-    zoom?: { pos?: number };
+    focus?: { pos?: number | { min?: number; max?: number } };
+    zoom?: { pos?: number | { min?: number; max?: number } };
   };
 };
 
+// `value.state` is a string; `range.state` lists the supported values.
 type IrLightsResponse = {
   IrLights?: {
-    state?: string;
+    state?: string | string[];
     mode?: string;
   };
 };
@@ -83,7 +90,7 @@ type WhiteLedResponse = {
     bright?: number;
     brightness?: number;
     Bright?: number;
-    mode?: string;
+    mode?: number | string;
   };
 };
 
@@ -95,6 +102,7 @@ export class ReolinkClient {
   private readonly sessions = new Map<string, { token: string; expiresAt: number; camera: CameraWithSecret }>();
   private readonly pendingLogins = new Map<string, Promise<string>>();
   private readonly apiOverrides = new Map<string, Pick<CameraWithSecret, 'protocol' | 'httpPort'>>();
+  private readonly zoomRanges = new Map<string, ZoomRange>();
   private readonly onvif = new OnvifClient();
 
   async testConnection(camera: CameraWithSecret): Promise<ConnectionStatus> {
@@ -258,11 +266,13 @@ export class ReolinkClient {
 
   async sendPtz(camera: CameraWithSecret, command: PtzCommand): Promise<void> {
     if (command.kind === 'zoomLevel') {
-      await this.startZoomFocus(camera, 'ZoomPos', zoomLevelPosition(command.level));
+      const range = await this.getZoomRange(camera);
+      await this.startZoomFocus(camera, 'ZoomPos', zoomLevelPosition(command.level, range));
       return;
     }
     if (command.kind === 'zoomPosition') {
-      await this.startZoomFocus(camera, 'ZoomPos', clampZoomPosition(command.position));
+      const range = await this.getZoomRange(camera);
+      await this.startZoomFocus(camera, 'ZoomPos', clampZoomPosition(command.position, range));
       return;
     }
 
@@ -286,18 +296,54 @@ export class ReolinkClient {
     }
   }
 
-  async getZoomFocus(camera: CameraWithSecret): Promise<{ zoom?: number; focus?: number }> {
+  async getZoomFocus(camera: CameraWithSecret): Promise<ZoomFocusState> {
     const token = await this.getToken(camera);
     const response = await this.postWithTokenRetry<ZoomFocusResponse>(
       camera,
-      [{ cmd: 'GetZoomFocus', action: 0, param: { channel: camera.channel } }],
+      [{ cmd: 'GetZoomFocus', action: 1, param: { channel: camera.channel } }],
       token,
+    ).catch(() =>
+      this.postWithTokenRetry<ZoomFocusResponse>(
+        camera,
+        [{ cmd: 'GetZoomFocus', action: 0, param: { channel: camera.channel } }],
+        token,
+      ),
     );
-    const value = response[0]?.value?.ZoomFocus;
-    return {
-      zoom: value?.zoom?.pos,
-      focus: value?.focus?.pos,
-    };
+    const state = parseZoomFocus(response[0]);
+    if (state.zoomRange) this.zoomRanges.set(camera.id, state.zoomRange);
+    return state;
+  }
+
+  // Moves the optical zoom to an absolute position (clamped to the camera's own
+  // range) and waits for the motor to settle so the caller gets the real end position.
+  async setZoomPosition(camera: CameraWithSecret, position: number): Promise<ZoomFocusState> {
+    const range = await this.getZoomRange(camera);
+    const target = clampZoomPosition(position, range);
+    await this.startZoomFocus(camera, 'ZoomPos', target);
+    return this.waitForZoomToSettle(camera, target);
+  }
+
+  private async getZoomRange(camera: CameraWithSecret): Promise<ZoomRange> {
+    const cached = this.zoomRanges.get(camera.id);
+    if (cached) return cached;
+    const state = await this.getZoomFocus(camera).catch(() => undefined);
+    return state?.zoomRange ?? DEFAULT_ZOOM_RANGE;
+  }
+
+  private async waitForZoomToSettle(camera: CameraWithSecret, target: number): Promise<ZoomFocusState> {
+    let last: ZoomFocusState = {};
+    let previous: number | undefined;
+    const deadline = Date.now() + 4000;
+    while (Date.now() < deadline) {
+      await sleep(300);
+      last = await this.getZoomFocus(camera).catch(() => ({}));
+      if (last.zoom === target) return last;
+      // Some models stop short of the requested position; treat two identical
+      // readings as settled.
+      if (typeof last.zoom === 'number' && last.zoom === previous) return last;
+      previous = last.zoom;
+    }
+    return last;
   }
 
   async getSnapshot(camera: CameraWithSecret): Promise<{ bytes: Buffer; contentType: string }> {
@@ -308,21 +354,23 @@ export class ReolinkClient {
     return requestBinary(url);
   }
 
-  async getIrLights(camera: CameraWithSecret): Promise<IrLightMode | undefined> {
+  async getIrLights(camera: CameraWithSecret): Promise<IrLightsInfo | undefined> {
     const token = await this.getToken(camera);
     const response = await this.postWithTokenRetry<IrLightsResponse>(
       camera,
-      [{ cmd: 'GetIrLights', action: 0, param: { channel: camera.channel } }],
+      [{ cmd: 'GetIrLights', action: 1, param: { channel: camera.channel } }],
       token,
     );
-    return normalizeIrMode(response[0]?.value?.IrLights?.mode ?? response[0]?.value?.IrLights?.state);
+    return parseIrLights(response[0]);
   }
 
   async setIrLights(camera: CameraWithSecret, mode: IrLightMode): Promise<void> {
     const token = await this.getToken(camera);
+    // The control field is `state`; a `mode` field is accepted but silently
+    // ignored (verified against TrackMix WiFi firmware v3.0.0.4255).
     await this.postWithTokenRetry(
       camera,
-      [{ cmd: 'SetIrLights', action: 0, param: { IrLights: { channel: camera.channel, mode: reolinkIrMode(mode) } } }],
+      [{ cmd: 'SetIrLights', action: 0, param: { IrLights: { channel: camera.channel, state: reolinkIrMode(mode) } } }],
       token,
     );
   }
@@ -334,20 +382,19 @@ export class ReolinkClient {
       [{ cmd: 'GetWhiteLed', action: 0, param: { channel: camera.channel } }],
       token,
     );
-    const value = response[0]?.value?.WhiteLed;
-    const brightness = value?.bright ?? value?.brightness ?? value?.Bright;
-    return {
-      enabled: (value?.state === 1 || value?.state === 'On' || value?.state === 'on') && brightness !== 0,
-      brightness,
-      mode: value?.mode,
-      supportsBrightness: typeof brightness === 'number',
-    };
+    return normalizeWhiteLed(response[0]?.value?.WhiteLed);
   }
 
-  async setWhiteLed(camera: CameraWithSecret, enabled: boolean, brightness?: number): Promise<void> {
+  async setWhiteLed(camera: CameraWithSecret, options: { mode?: number; enabled?: boolean; brightness?: number }): Promise<void> {
     const token = await this.getToken(camera);
-    const nextBrightness = enabled ? clampBrightness(brightness ?? 85) : 0;
-    const whiteLed: Record<string, unknown> = { channel: camera.channel, state: enabled ? 1 : 0, bright: nextBrightness };
+    const whiteLed: Record<string, unknown> = { channel: camera.channel };
+    if (options.mode !== undefined) {
+      whiteLed.mode = options.mode;
+      whiteLed.state = options.mode === 0 ? 0 : 1;
+    } else if (options.enabled !== undefined) {
+      whiteLed.state = options.enabled ? 1 : 0;
+    }
+    if (options.brightness !== undefined) whiteLed.bright = clampBrightness(options.brightness);
     try {
       await this.postWithTokenRetry(
         camera,
@@ -536,21 +583,44 @@ function clampBrightness(brightness: number): number {
   return Math.max(0, Math.min(100, Math.round(brightness)));
 }
 
-function zoomLevelPosition(level: 1 | 2 | 3 | 4): number {
-  switch (level) {
-    case 1:
-      return 0;
-    case 2:
-      return 11;
-    case 3:
-      return 23;
-    case 4:
-      return 34;
-  }
+// Legacy fallback for cameras that do not report a zoom range via GetZoomFocus action:1.
+export const DEFAULT_ZOOM_RANGE: ZoomRange = { min: 0, max: 34 };
+
+export function parseZoomFocus(item?: {
+  value?: ZoomFocusResponse;
+  range?: ZoomFocusResponse;
+}): ZoomFocusState {
+  const value = item?.value?.ZoomFocus;
+  const range = item?.range?.ZoomFocus;
+  return {
+    zoom: positionNumber(value?.zoom?.pos),
+    focus: positionNumber(value?.focus?.pos),
+    zoomRange: parseRange(range?.zoom?.pos),
+    focusRange: parseRange(range?.focus?.pos),
+  };
 }
 
-function clampZoomPosition(position: number): number {
-  return Math.max(0, Math.min(34, Math.round(position)));
+function positionNumber(pos?: number | { min?: number; max?: number }): number | undefined {
+  return typeof pos === 'number' && Number.isFinite(pos) ? pos : undefined;
+}
+
+function parseRange(pos?: number | { min?: number; max?: number }): ZoomRange | undefined {
+  if (!pos || typeof pos !== 'object') return undefined;
+  const { min, max } = pos;
+  if (typeof min !== 'number' || typeof max !== 'number' || max <= min) return undefined;
+  return { min, max };
+}
+
+function zoomLevelPosition(level: 1 | 2 | 3 | 4, range: ZoomRange): number {
+  return Math.round(range.min + ((level - 1) / 3) * (range.max - range.min));
+}
+
+export function clampZoomPosition(position: number, range: ZoomRange = DEFAULT_ZOOM_RANGE): number {
+  return Math.max(range.min, Math.min(range.max, Math.round(position)));
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function clampPresetId(id: number): number {
@@ -649,6 +719,35 @@ function abilityFlag(value: unknown): boolean {
     return Object.values(value as Record<string, unknown>).some(abilityFlag);
   }
   return false;
+}
+
+export function parseIrLights(item?: { value?: IrLightsResponse; range?: IrLightsResponse }): IrLightsInfo | undefined {
+  const raw = item?.value?.IrLights?.state ?? item?.value?.IrLights?.mode;
+  const mode = normalizeIrMode(typeof raw === 'string' ? raw : undefined);
+  const rawOptions = item?.range?.IrLights?.state;
+  const options = Array.isArray(rawOptions)
+    ? rawOptions
+        .map((option) => normalizeIrMode(option))
+        .filter((option): option is IrLightMode => option !== undefined)
+    : [];
+  if (mode === undefined && options.length === 0) return undefined;
+  return { mode, options: options.length > 0 ? options : ['auto', 'on', 'off'] };
+}
+
+export function normalizeWhiteLed(value?: WhiteLedResponse['WhiteLed']): WhiteLedState {
+  const brightness = value?.bright ?? value?.brightness ?? value?.Bright;
+  const mode = typeof value?.mode === 'number' ? value.mode : typeof value?.mode === 'string' ? Number(value.mode) : undefined;
+  return {
+    // `mode` is the actual configuration; `state` is only a status field on
+    // several firmwares. mode 0 = off, 1 = auto at night, 3 = schedule.
+    enabled: mode !== undefined && Number.isFinite(mode)
+      ? mode !== 0
+      : value?.state === 1 || value?.state === 'On' || value?.state === 'on',
+    brightness,
+    mode: mode !== undefined && Number.isFinite(mode) ? mode : undefined,
+    supportsModes: mode !== undefined && Number.isFinite(mode),
+    supportsBrightness: typeof brightness === 'number',
+  };
 }
 
 function normalizeIrMode(value?: string): IrLightMode | undefined {

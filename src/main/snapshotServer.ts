@@ -1,7 +1,5 @@
 import { createServer, type Server } from 'node:http';
-import { appendFile } from 'node:fs/promises';
-import { app } from 'electron';
-import { join } from 'node:path';
+import { logToFile } from './logging.js';
 import type { CameraStore } from './store.js';
 import type { ReolinkClient } from './reolinkClient.js';
 import { openPanasonicStream } from './panasonicClient.js';
@@ -16,6 +14,10 @@ export class SnapshotServer {
     if (this.port) return this.port;
 
     this.server = createServer(async (request, response) => {
+      request.on('error', () => response.destroy());
+      response.on('error', (error) => {
+        void logSnapshot(`response error ${request.url ?? 'unknown'}: ${error instanceof Error ? error.message : String(error)}`);
+      });
       try {
         const snapshotMatch = request.url?.match(/^\/snapshot\/([^/?]+)/);
         const mjpegMatch = request.url?.match(/^\/mjpeg\/([^/?]+)/);
@@ -38,7 +40,6 @@ export class SnapshotServer {
               'cache-control': 'no-store, no-cache, must-revalidate',
               pragma: 'no-cache',
               connection: 'close',
-              'access-control-allow-origin': '*',
             });
             void logSnapshot(`panasonic mjpeg proxy ${camera.host} content-type=${upstreamContentType ?? 'missing'}`);
             pipePanasonicMjpeg(upstream, response, upstreamContentType);
@@ -50,7 +51,6 @@ export class SnapshotServer {
             'content-type': 'multipart/x-mixed-replace; boundary=fjoscam',
             'cache-control': 'no-store, no-cache, must-revalidate',
             connection: 'close',
-            'access-control-allow-origin': '*',
           });
 
           let closed = false;
@@ -78,12 +78,21 @@ export class SnapshotServer {
         response.writeHead(200, {
           'content-type': cameraResponse.contentType,
           'cache-control': 'no-store',
-          'access-control-allow-origin': '*',
         });
         response.end(cameraResponse.bytes);
       } catch (error) {
         void logSnapshot(`request failed ${request.url ?? 'unknown'}: ${error instanceof Error ? error.message : String(error)}`);
-        response.writeHead(500).end(error instanceof Error ? error.message : 'Snapshot error');
+        try {
+          if (response.destroyed) return;
+          if (!response.headersSent) {
+            response.writeHead(500);
+            response.end(error instanceof Error ? error.message : 'Snapshot error');
+          } else if (response.writable) {
+            response.end();
+          }
+        } catch {
+          response.destroy();
+        }
       }
     });
 
@@ -125,7 +134,7 @@ function sleep(ms: number): Promise<void> {
 }
 
 async function logSnapshot(message: string): Promise<void> {
-  await appendFile(join(app.getPath('userData'), 'snapshot-server.log'), `${new Date().toISOString()} ${message}\n`, 'utf8').catch(() => undefined);
+  await logToFile('snapshot-server.log', message);
 }
 
 function pipePanasonicMjpeg(upstream: NodeJS.ReadableStream, response: NodeJS.WritableStream & { destroyed?: boolean }, contentType?: string): void {

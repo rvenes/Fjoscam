@@ -1,6 +1,6 @@
 import { app, BrowserWindow, Menu, ipcMain, shell, type WebFrameMain } from 'electron';
-import { appendFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { logToFile } from './logging.js';
 import { CameraStore } from './store.js';
 import { ReolinkClient } from './reolinkClient.js';
 import { SnapshotServer } from './snapshotServer.js';
@@ -41,11 +41,7 @@ async function createWindow(): Promise<void> {
 
   window.webContents.on('console-message', (event) => {
     const details = event as unknown as { level?: string | number; message?: string };
-    void appendFile(
-      join(app.getPath('userData'), 'renderer.log'),
-      `${new Date().toISOString()} [${details.level ?? 'info'}] ${sanitizeLogMessage(details.message ?? '')}\n`,
-      'utf8',
-    ).catch(() => undefined);
+    void logToFile('renderer.log', `[${details.level ?? 'info'}] ${sanitizeLogMessage(details.message ?? '')}`);
   });
 
   window.webContents.setWindowOpenHandler(({ url }) => {
@@ -231,9 +227,9 @@ function registerIpc(): void {
     return reolink.getWhiteLed(camera).catch(() => undefined);
   });
 
-  ipcMain.handle('camera:set-white-led', async (_event, id: string, enabled: boolean, brightness?: number) => {
+  ipcMain.handle('camera:set-white-led', async (_event, id: string, options: { mode?: number; enabled?: boolean; brightness?: number }) => {
     const camera = await getCachedCamera(id);
-    await reolink.setWhiteLed(camera, enabled, brightness);
+    await reolink.setWhiteLed(camera, options ?? {});
   });
 
   ipcMain.handle('camera:get-siren-config', async (_event, id: string) => {
@@ -265,6 +261,12 @@ function registerIpc(): void {
     const camera = await getCachedCamera(id);
     if (camera.kind !== 'reolink') return {};
     return reolink.getZoomFocus(camera).catch(() => ({}));
+  });
+
+  ipcMain.handle('camera:set-zoom-position', async (_event, id: string, position: number) => {
+    const camera = await getCachedCamera(id);
+    if (camera.kind !== 'reolink') return {};
+    return reolink.setZoomPosition(camera, Number(position));
   });
 
   ipcMain.handle('camera:save-preset', async (_event, id: string, presetId: number, name: string) => {
@@ -329,7 +331,7 @@ async function setStreamFrameAudio(window: BrowserWindow, muted: boolean, volume
     const value = result.status === 'fulfilled' ? String(result.value) : `error:${result.reason instanceof Error ? result.reason.message : String(result.reason)}`;
     return `${safeFrameLabel(frame.url)} => ${sanitizeLogMessage(value)}`;
   });
-  await appendFile(join(app.getPath('userData'), 'renderer.log'), `${new Date().toISOString()} [audio] muted=${muted} volume=${clampedVolume} frames=${frames.length} ${summary.join(' | ')}\n`, 'utf8').catch(() => undefined);
+  await logToFile('renderer.log', `[audio] muted=${muted} volume=${clampedVolume} frames=${frames.length} ${summary.join(' | ')}`);
 }
 
 function streamFrames(frame: WebFrameMain): WebFrameMain[] {

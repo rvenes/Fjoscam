@@ -7,12 +7,14 @@ import type {
   CameraProfile,
   ConnectionStatus,
   IrLightMode,
+  IrLightsInfo,
   Preset,
   PtzCommand,
   SirenConfig,
   StreamInfo,
   UpdateStatus,
   WhiteLedState,
+  ZoomFocusState,
 } from '../shared/types.js';
 
 type WebRtcStream = {
@@ -41,16 +43,17 @@ const api = {
   getPresets: (id: string): Promise<Preset[]> => ipcRenderer.invoke('camera:get-presets', id),
   getStreamInfo: (id: string): Promise<{ high?: StreamInfo; low?: StreamInfo }> => ipcRenderer.invoke('camera:get-stream-info', id),
   getProfile: (id: string): Promise<CameraProfile | undefined> => ipcRenderer.invoke('camera:get-profile', id),
-  getIrLights: (id: string): Promise<IrLightMode | undefined> => ipcRenderer.invoke('camera:get-ir-lights', id),
+  getIrLights: (id: string): Promise<IrLightsInfo | undefined> => ipcRenderer.invoke('camera:get-ir-lights', id),
   setIrLights: (id: string, mode: IrLightMode): Promise<void> => ipcRenderer.invoke('camera:set-ir-lights', id, mode),
   getWhiteLed: (id: string): Promise<WhiteLedState | undefined> => ipcRenderer.invoke('camera:get-white-led', id),
-  setWhiteLed: (id: string, enabled: boolean, brightness?: number): Promise<void> =>
-    ipcRenderer.invoke('camera:set-white-led', id, enabled, brightness),
+  setWhiteLed: (id: string, options: { mode?: number; enabled?: boolean; brightness?: number }): Promise<void> =>
+    ipcRenderer.invoke('camera:set-white-led', id, options),
   getSirenConfig: (id: string): Promise<SirenConfig | undefined> => ipcRenderer.invoke('camera:get-siren-config', id),
   playSiren: (id: string): Promise<void> => ipcRenderer.invoke('camera:play-siren', id),
   getDeviceName: (input: CameraInput): Promise<string | undefined> => ipcRenderer.invoke('camera:get-device-name', input),
   sendPtz: (id: string, command: PtzCommand): Promise<void> => ipcRenderer.invoke('camera:ptz', id, command),
-  getZoomFocus: (id: string): Promise<{ zoom?: number; focus?: number }> => ipcRenderer.invoke('camera:get-zoom-focus', id),
+  getZoomFocus: (id: string): Promise<ZoomFocusState> => ipcRenderer.invoke('camera:get-zoom-focus', id),
+  setZoomPosition: (id: string, position: number): Promise<ZoomFocusState> => ipcRenderer.invoke('camera:set-zoom-position', id, position),
   savePreset: (id: string, presetId: number, name: string): Promise<Preset[]> => ipcRenderer.invoke('camera:save-preset', id, presetId, name),
   deletePreset: (id: string, presetId: number): Promise<Preset[]> => ipcRenderer.invoke('camera:delete-preset', id, presetId),
   getSnapshotUrl: (id: string): Promise<string> => ipcRenderer.invoke('camera:get-snapshot-url', id),
