@@ -1,6 +1,6 @@
 {
   "name": "fjoscam",
-  "version": "1.0.5",
+  "version": "1.0.6",
   "description": "Low-latency Reolink LAN viewer for lambing season monitoring.",
   "main": "dist-electron/main/main.js",
   "scripts": {

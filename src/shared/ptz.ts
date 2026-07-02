@@ -1,4 +1,4 @@
-import type { PtzCommand } from './types.js';
+import type { Preset, PtzCommand } from './types.js';
 
 export function commandToReolinkOp(command: PtzCommand): string {
   switch (command.kind) {
@@ -41,6 +41,25 @@ export function clickToPtzCommand(xRatio: number, yRatio: number, speed: number)
   if (dx > 0 && dy < 0) return { kind: 'move', direction: 'RightUp', speed };
   if (dx < 0 && dy > 0) return { kind: 'move', direction: 'LeftDown', speed };
   return { kind: 'move', direction: 'RightDown', speed };
+}
+
+// One keyboard/step nudge moves the optical zoom ~15% of the camera's range,
+// so the feel is the same whether the range is 0-34 or 1000-6000.
+export function zoomNudgeStep(range: { min: number; max: number }): number {
+  return Math.max(1, Math.round((range.max - range.min) * 0.15));
+}
+
+// Key 1-9 maps to preset id 1-9, key 0 to preset id 10.
+export function presetIdFromKey(code: string): number | null {
+  if (/^Digit[1-9]$/.test(code)) return Number(code.slice(5));
+  if (code === 'Digit0') return 10;
+  return null;
+}
+
+export function presetForKey(code: string, presets: Preset[]): Preset | undefined {
+  const id = presetIdFromKey(code);
+  if (id === null) return undefined;
+  return presets.find((preset) => preset.id === id);
 }
 
 function clamp(value: number): number {

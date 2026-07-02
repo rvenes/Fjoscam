@@ -87,12 +87,37 @@ export type CameraProfile = {
   capabilities: CameraCapabilities;
 };
 
+export type ZoomRange = {
+  min: number;
+  max: number;
+};
+
+// Position range varies per model (e.g. 0-34 on E1 Zoom, 1000-6000 on TrackMix),
+// so the camera-reported range must be used when available.
+export type ZoomFocusState = {
+  zoom?: number;
+  focus?: number;
+  zoomRange?: ZoomRange;
+  focusRange?: ZoomRange;
+};
+
 export type IrLightMode = 'auto' | 'on' | 'off';
 
+// `options` comes from the camera's own capability range; e.g. TrackMix only
+// supports Auto and Off.
+export type IrLightsInfo = {
+  mode?: IrLightMode;
+  options: IrLightMode[];
+};
+
+// White LED behaviour is controlled by `mode` (0 = off, 1 = auto at night on
+// detection, 3 = schedule). The `state` field is read-only status on several
+// firmwares and cannot be used to switch the light.
 export type WhiteLedState = {
   enabled: boolean;
   brightness?: number;
-  mode?: string;
+  mode?: number;
+  supportsModes?: boolean;
   supportsBrightness?: boolean;
 };
 
