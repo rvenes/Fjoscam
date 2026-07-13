@@ -1,6 +1,6 @@
 {
   "name": "fjoscam",
-  "version": "1.0.6",
+  "version": "1.0.7",
   "description": "Low-latency Reolink LAN viewer for lambing season monitoring.",
   "main": "dist-electron/main/main.js",
   "scripts": {
@@ -20,6 +20,7 @@
   "build": {
     "appId": "no.fjoscam.viewer",
     "productName": "Fjoscam",
+    "afterSign": "scripts/verifyMacSignature.cjs",
     "files": [
       "dist-renderer/**",
       "dist-electron/**",
@@ -33,7 +34,8 @@
       "buildResources": "build"
     },
     "mac": {
-      "category": "public.app-category.video"
+      "category": "public.app-category.video",
+      "identity": "Apple Development: rune@venes.org (X788384FY7)"
     },
     "win": {
       "target": "nsis"

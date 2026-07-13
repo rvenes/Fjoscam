@@ -1457,7 +1457,7 @@ export default function App() {
               <div className="modal-actions donation-actions">
                 <a
                   className="donation-button"
-                  href="https://www.paypal.com/donate/?business=VSSTWS8ETDPXW&no_recurring=0&item_name=Support+my+software+projects+%E2%80%94+every+contribution+helps.+Thank+you%21&currency_code=USD"
+                  href="https://www.paypal.com/paypalme/rvenes"
                   target="_blank"
                   rel="noreferrer"
                 >
