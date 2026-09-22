@@ -4,13 +4,16 @@ import type { UpdateStatus } from '../shared/types.js';
 
 export class AppUpdater {
   private lastAvailableVersion: string | undefined;
+  private downloadedVersion: string | undefined;
+  private installation: Promise<void> | undefined;
 
-  constructor() {
+  constructor(private readonly withInstallation: (launch: () => void) => Promise<void> = async (launch) => { launch(); }) {
     autoUpdater.autoDownload = false;
     autoUpdater.autoInstallOnAppQuit = false;
 
     autoUpdater.on('checking-for-update', () => this.broadcast({ state: 'checking', currentVersion: app.getVersion() }));
     autoUpdater.on('update-available', (info) => {
+      if (this.downloadedVersion !== info.version) this.downloadedVersion = undefined;
       this.lastAvailableVersion = info.version;
       this.broadcast({
         state: 'available',
@@ -23,12 +26,11 @@ export class AppUpdater {
     autoUpdater.on('update-not-available', () => this.broadcast({ state: 'not-available', currentVersion: app.getVersion() }));
     autoUpdater.on('download-progress', (progress) => this.broadcast(downloadStatus(progress, this.lastAvailableVersion)));
     autoUpdater.on('update-downloaded', (info) => {
+      this.downloadedVersion = info.version;
       this.lastAvailableVersion = info.version;
       this.broadcast({ state: 'downloaded', currentVersion: app.getVersion(), version: info.version });
     });
-    autoUpdater.on('error', (error) =>
-      this.broadcast({ state: 'error', currentVersion: app.getVersion(), message: error.message || 'Update check failed.' }),
-    );
+    autoUpdater.on('error', () => { this.installation = undefined; this.reportError(); });
   }
 
   getVersion(): string {
@@ -39,9 +41,8 @@ export class AppUpdater {
     if (!app.isPackaged) {
       return { state: 'error', currentVersion: app.getVersion(), message: 'Auto-update can only be tested from a packaged app.' };
     }
-    void autoUpdater.checkForUpdates().catch((error: Error) => {
-      this.broadcast({ state: 'error', currentVersion: app.getVersion(), message: error.message });
-    });
+    try { void autoUpdater.checkForUpdates().catch(() => this.reportError()); }
+    catch { return this.reportError(); }
     return { state: 'checking', currentVersion: app.getVersion() };
   }
 
@@ -49,30 +50,55 @@ export class AppUpdater {
     if (!app.isPackaged) {
       return { state: 'error', currentVersion: app.getVersion(), message: 'Auto-update can only be tested from a packaged app.' };
     }
-    void autoUpdater.downloadUpdate().catch((error: Error) => {
-      this.broadcast({ state: 'error', currentVersion: app.getVersion(), message: error.message });
-    });
+    this.downloadedVersion = undefined;
+    try { void autoUpdater.downloadUpdate().catch(() => this.reportError()); }
+    catch { return this.reportError(); }
     return { state: 'downloading', currentVersion: app.getVersion(), version: this.lastAvailableVersion };
   }
 
-  quitAndInstall(): void {
-    autoUpdater.quitAndInstall(false, true);
+  quitAndInstall(): Promise<void> {
+    if (this.installation) return this.installation;
+    const version = this.downloadedVersion;
+    if (!app.isPackaged || !version) return Promise.reject(new Error('No downloaded update is ready to install.'));
+    const operation = Promise.resolve().then(async () => {
+      this.broadcast({ state: 'installing', currentVersion: app.getVersion(), version });
+      try {
+        await this.withInstallation(() => autoUpdater.quitAndInstall(false, true));
+      } catch {
+        this.installation = undefined;
+        this.reportError();
+        throw new Error('Could not prepare or start the update installer.');
+      }
+    });
+    this.installation = operation;
+    return operation;
+  }
+
+  private reportError(): UpdateStatus {
+    // Updater errors can contain the full feed response or local file paths.
+    const status: UpdateStatus = { state: 'error', currentVersion: app.getVersion(),
+      message: 'Update failed. Check the connection and update source, then try again.' };
+    this.broadcast(status);
+    return status;
   }
 
   private broadcast(status: UpdateStatus): void {
     for (const window of BrowserWindow.getAllWindows()) {
-      window.webContents.send('app:update-status', status);
+      try {
+        if (!window.webContents.isDestroyed()) window.webContents.send('app:update-status', status);
+      } catch { /* A closing window must not break updater events or other windows. */ }
     }
   }
 }
 
 function downloadStatus(progress: ProgressInfo, version?: string): UpdateStatus {
+  const nonnegative = (value: number): number | undefined => Number.isFinite(value) && value >= 0 ? value : undefined;
   return {
     state: 'downloading',
     currentVersion: app.getVersion(),
     version,
-    percent: progress.percent,
-    transferred: progress.transferred,
-    total: progress.total,
+    percent: nonnegative(progress.percent) === undefined ? undefined : Math.min(100, progress.percent),
+    transferred: nonnegative(progress.transferred),
+    total: nonnegative(progress.total),
   };
 }

@@ -1,9 +1,18 @@
-import { FormEvent, MouseEvent, WheelEvent, useEffect, useMemo, useRef, useState } from 'react';
+import { FormEvent, MouseEvent, WheelEvent, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import { ArrowDown, ArrowDownLeft, ArrowDownRight, ArrowLeft, ArrowRight, ArrowUp, ArrowUpLeft, ArrowUpRight, Camera, CheckCircle2, Crosshair, Eye, Focus, Loader2, Pause, Play, Plus, Radio, RotateCcw, Trash2, Volume2, VolumeX, WifiOff, ZoomIn, ZoomOut } from 'lucide-react';
+import { ArrowDown, ArrowDownLeft, ArrowDownRight, ArrowLeft, ArrowRight, ArrowUp, ArrowUpLeft, ArrowUpRight, Camera, Crosshair, Eye, Focus, Loader2, Pause, Play, Plus, Radio, RotateCcw, Trash2, Volume2, VolumeX, WifiOff, ZoomIn, ZoomOut } from 'lucide-react';
 import type { AppState, CameraConfig, CameraDiscoveryResult, CameraInput, CameraProfile, ConnectionStatus, IrLightMode, IrLightsInfo, Preset, PtzCommand, PtzDirection, StreamInfo, UpdateStatus, WhiteLedState, ZoomFocusState, ZoomRange } from '../shared/types';
 import { clickToPtzCommand, presetForKey, presetIdFromKey, zoomNudgeStep } from '../shared/ptz';
 import './styles.css';
+import { CameraTlsSettings } from './CameraTlsSettings';
+import { useCameraWork } from './useCameraWork';
+import { usePlaybackHealth } from './usePlaybackHealth';
+import { coalescedWriter } from './coalescedWriter';
+import { useWindowFullscreen } from './useWindowFullscreen';
+import { Modal } from './Modal';
+import { CameraDiscovery, discoveryDisplayName } from './CameraDiscovery';
+import { panasonicPresets } from '../shared/cameraDefaults';
+import { allowsPtz, cameraControls, supportsSecondaryLens } from '../shared/cameraControls';
 
 const defaultInput: CameraInput = {
   kind: 'reolink',
@@ -20,6 +29,8 @@ const defaultInput: CameraInput = {
   mjpegPath: '/nphMotionJpeg?Resolution=640x480&Quality=Standard',
   ptzPath: '/nphControlCamera',
   streamUrl: '',
+  allowInsecureOnvif: false,
+  onvifPort: 8000,
 };
 
 const directions: Array<{ direction: PtzDirection; Icon: typeof ArrowUp; className: string }> = [
@@ -49,17 +60,15 @@ export default function App() {
   const [form, setForm] = useState<CameraInput>(defaultInput);
   const [editingId, setEditingId] = useState<string | undefined>();
   const [showSettings, setShowSettings] = useState(false);
-  const [discoveredCameras, setDiscoveredCameras] = useState<CameraDiscoveryResult[]>([]);
-  const [discoveryBusy, setDiscoveryBusy] = useState(false);
-  const [discoveryMessage, setDiscoveryMessage] = useState('');
   const [showTips, setShowTips] = useState(false);
   const [cameraEditMode, setCameraEditMode] = useState(false);
   const [ptzExpanded, setPtzExpanded] = useState(false);
   const [controlsExpanded, setControlsExpanded] = useState(false);
-  const [viewerFullscreen, setViewerFullscreen] = useState(false);
+  const viewerFullscreen = useWindowFullscreen();
   const [appVersion, setAppVersion] = useState('');
   const [showAbout, setShowAbout] = useState(false);
   const [updateStatus, setUpdateStatus] = useState<UpdateStatus | null>(null);
+  const updateRevision = useRef(0);
   const [showUpdateDialog, setShowUpdateDialog] = useState(false);
   const [showPresetDialog, setShowPresetDialog] = useState(false);
   const [presetDraftId, setPresetDraftId] = useState(1);
@@ -68,13 +77,16 @@ export default function App() {
   const [focusSpeed, setFocusSpeed] = useState(20);
   const [presets, setPresets] = useState<Preset[]>([]);
   const [streamInfo, setStreamInfo] = useState<{ high?: StreamInfo; low?: StreamInfo }>({});
-  const [profile, setProfile] = useState<CameraProfile | undefined>();
+  const [loadedProfile, setProfile] = useState<CameraProfile | undefined>();
+  const profileOwner = useRef<ReturnType<typeof useCameraWork> | null>(null);
   const [irLights, setIrLights] = useState<IrLightsInfo | undefined>();
   const [whiteLed, setWhiteLed] = useState<WhiteLedState | undefined>();
   const [snapshotUrl, setSnapshotUrl] = useState('');
   const [fallbackUrl, setFallbackUrl] = useState('');
   const [isStreamEnabled, setIsStreamEnabled] = useState(true);
+  const [streamFailure, setStreamFailure] = useState(false);
   const [streamRevision, setStreamRevision] = useState(0);
+  const [cameraConfigRevision, setCameraConfigRevision] = useState(0);
   const [digitalZoom, setDigitalZoom] = useState(1);
   const [opticalZoomPosition, setOpticalZoomPosition] = useState(0);
   const [zoomRange, setZoomRange] = useState<ZoomRange>(defaultZoomRange);
@@ -85,7 +97,6 @@ export default function App() {
   const stageRef = useRef<HTMLDivElement | null>(null);
   const mediaRef = useRef<HTMLImageElement | HTMLVideoElement | null>(null);
   const webRtcFrameRef = useRef<HTMLIFrameElement | null>(null);
-  const audioApplyTimerRef = useRef<number | null>(null);
   const focusValueRef = useRef(focusSpeed);
   const dragRef = useRef<{
     active: boolean;
@@ -96,26 +107,158 @@ export default function App() {
     panY: number;
   } | null>(null);
   const runtimeLoadRef = useRef(0);
+  const streamOwnerRef = useRef<string | null>(null);
   const zoomTargetRef = useRef<number | null>(null);
   const zoomSendTimerRef = useRef<number | null>(null);
   const zoomBusyRef = useRef(false);
+  const zoomPermissionRevision = useRef(0);
+  const zoomRefreshTimers = useRef(new Set<number>());
+  const stateQueue = useRef<Promise<unknown>>(Promise.resolve());
+  const stateRequest = useRef(0);
+  const stateRef = useRef(state);
+  const mounted = useRef(true);
+  const viewChanging = useRef(false);
+  const stateViewDirty = useRef(false);
+  const teleZoomPending = useRef<string | null>(null);
+  const busyRequest = useRef(0);
   const zoomInteractionRef = useRef(0);
   const zoomHoldRef = useRef(false);
-  const activeCameraIdRef = useRef<string | null>(null);
+  const ptzCameraIdRef = useRef<string | null>(null);
   const [status, setStatus] = useState<ConnectionStatus | null>(null);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState('');
+  const [configurationError, setConfigurationError] = useState('');
 
   const activeCamera = useMemo(
     () => state.cameras.find((camera) => camera.id === state.activeCameraId) ?? null,
     [state],
   );
-  activeCameraIdRef.current = activeCamera?.id ?? null;
   const existingCameraHosts = useMemo(() => new Set(state.cameras.map((camera) => camera.host).filter(Boolean)), [state.cameras]);
   const isReolinkCamera = !activeCamera?.kind || activeCamera.kind === 'reolink';
+  const cameraWork = useCameraWork(JSON.stringify([activeCamera, cameraConfigRevision]));
+  const profile = profileOwner.current === cameraWork ? loadedProfile : undefined;
   const hasSecondaryLens = activeCamera ? supportsSecondaryLens(activeCamera, profile) : false;
+  const controls = cameraControls(activeCamera, profile);
+  const canZoom = isReolinkCamera && controls.zoom;
+  const lightWriter = useMemo(() => coalescedWriter<{ mode?: number; enabled?: boolean; brightness?: number }>(
+    (patch) => window.fjoscam.setWhiteLed(activeCamera!.id, patch)), [cameraWork, controls.light]);
+  const irWriter = useMemo(() => coalescedWriter<{ mode: IrLightMode }>(
+    (patch) => window.fjoscam.setIrLights(activeCamera!.id, patch.mode)), [cameraWork, controls.ir]);
+  useLayoutEffect(() => () => lightWriter.cancel(), [lightWriter]);
+  useLayoutEffect(() => () => irWriter.cancel(), [irWriter]);
+  const playback = usePlaybackHealth(streamSrc(), isStreamEnabled, () => {
+    setStreamFailure(false);
+    setStreamRevision((value) => value + 1);
+  });
+  const playbackText = streamFailure ? 'Playback failed. Reconnect to retry.' : playback.text;
+  const modalOpen = showSettings || showAbout || showPresetDialog || (showUpdateDialog && !!updateStatus);
+  useLayoutEffect(() => {
+    if (modalOpen) { cancelZoomWork(); void stopHeldPtz(); }
+  }, [modalOpen]);
+
+  function clearCameraWork() {
+    lightWriter.cancel(); irWriter.cancel();
+    cameraWork.invalidate();
+    clearCurrentStream();
+    cancelZoomWork();
+    setProfile(undefined); setIrLights(undefined); setWhiteLed(undefined);
+    setPresets([]); setStreamInfo({}); setStatus(null); setMessage(''); setStreamFailure(false);
+    setOpticalZoomPosition(0); setZoomRange(defaultZoomRange);
+    setShowPresetDialog(false); setBusy(false);
+    busyRequest.current += 1;
+  }
+
+  function cancelZoomWork() {
+    zoomPermissionRevision.current += 1;
+    if (zoomSendTimerRef.current !== null) window.clearTimeout(zoomSendTimerRef.current);
+    zoomSendTimerRef.current = null;
+    for (const timer of zoomRefreshTimers.current) window.clearTimeout(timer);
+    zoomRefreshTimers.current.clear();
+    zoomTargetRef.current = null;
+    zoomBusyRef.current = false;
+  }
+
+  function captureZoomWork() {
+    const current = cameraWork.capture();
+    const revision = zoomPermissionRevision.current;
+    return () => current() && revision === zoomPermissionRevision.current;
+  }
+
+  useLayoutEffect(() => { if (!canZoom) cancelZoomWork(); }, [cameraWork, canZoom]);
+
+  useLayoutEffect(() => {
+    clearCameraWork();
+    viewChanging.current = false;
+    resetDigitalZoom();
+    return () => {
+      if (zoomSendTimerRef.current !== null) window.clearTimeout(zoomSendTimerRef.current);
+      for (const timer of zoomRefreshTimers.current) window.clearTimeout(timer);
+      zoomRefreshTimers.current.clear();
+    };
+  }, [cameraWork]);
+
+  function beginBusy() {
+    const request = ++busyRequest.current;
+    setBusy(true);
+    return () => { if (mounted.current && request === busyRequest.current) setBusy(false); };
+  }
+
+  // Serialize whole-state IPC responses. Only the latest intent publishes its
+  // snapshot; that snapshot includes all earlier successful queued mutations.
+  async function changeState(operation: (current: AppState) => Promise<AppState>, affectsView = true) {
+    const request = ++stateRequest.current;
+    setConfigurationError('');
+    if (affectsView) {
+      stateViewDirty.current = true;
+      viewChanging.current = true;
+      teleZoomPending.current = null;
+      clearCameraWork();
+      void stopHeldPtz();
+    }
+    const pending = stateQueue.current.then(async () => {
+      if (!mounted.current) return undefined;
+      const next = await operation(stateRef.current);
+      stateRef.current = next;
+      return next;
+    });
+    stateQueue.current = pending.catch(() => undefined);
+    try {
+      const next = await pending;
+      if (!mounted.current || request !== stateRequest.current || !next) return undefined;
+      setState(next);
+      if (stateViewDirty.current) setCameraConfigRevision((value) => value + 1);
+      stateViewDirty.current = false;
+      return next;
+    } catch (error) {
+      if (mounted.current && request === stateRequest.current) {
+        teleZoomPending.current = null;
+        setState(stateRef.current);
+        setConfigurationError(errorMessage(error));
+        setCameraConfigRevision((value) => value + 1);
+        stateViewDirty.current = false;
+      }
+      return undefined;
+    }
+  }
 
   useEffect(() => {
+    const stop = () => { void stopHeldPtz(); };
+    const visibility = () => { if (document.hidden) stop(); };
+    window.addEventListener('blur', stop);
+    window.addEventListener('mouseup', stop);
+    window.addEventListener('pointercancel', stop);
+    document.addEventListener('visibilitychange', visibility);
+    return () => {
+      stop();
+      window.removeEventListener('blur', stop);
+      window.removeEventListener('mouseup', stop);
+      window.removeEventListener('pointercancel', stop);
+      document.removeEventListener('visibilitychange', visibility);
+    };
+  }, [cameraWork]);
+
+  useEffect(() => {
+    mounted.current = true;
     void refresh();
     void window.fjoscam.getVersion().then(setAppVersion);
     const removeOpenPanelListener = window.fjoscam.onOpenPanel((panel) => {
@@ -128,6 +271,7 @@ export default function App() {
     });
     const removeCameraEditListener = window.fjoscam.onCameraEditMode((enabled) => setCameraEditMode(enabled));
     const removeUpdateListener = window.fjoscam.onUpdateStatus((nextStatus) => {
+      updateRevision.current += 1;
       setUpdateStatus(nextStatus);
       setShowUpdateDialog(true);
     });
@@ -136,7 +280,8 @@ export default function App() {
       setShowAbout(true);
     });
     return () => {
-      if (audioApplyTimerRef.current !== null) window.clearTimeout(audioApplyTimerRef.current);
+      mounted.current = false;
+      releaseCurrentStream();
       removeOpenPanelListener();
       removeCameraEditListener();
       removeUpdateListener();
@@ -144,8 +289,9 @@ export default function App() {
     };
   }, []);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     function handleKeyDown(event: KeyboardEvent) {
+      if (modalOpen) return;
       if (isEditableTarget(event.target)) return;
 
       if (event.code === 'F11' || event.code === 'Enter' || event.code === 'NumpadEnter') {
@@ -222,10 +368,9 @@ export default function App() {
     }
 
     function handleKeyUp(event: KeyboardEvent) {
-      if (isEditableTarget(event.target) || !activeCamera) return;
       if (numpadDirection(event.code)) {
         event.preventDefault();
-        void send({ kind: 'stop' });
+        void stopHeldPtz();
       }
     }
 
@@ -235,22 +380,34 @@ export default function App() {
       window.removeEventListener('keydown', handleKeyDown);
       window.removeEventListener('keyup', handleKeyUp);
     };
-  }, [activeCamera, isReolinkCamera, opticalZoomPosition, presets, speed, state.cameras, viewerFullscreen, zoomRange]);
+  }, [activeCamera, cameraWork, profile, isReolinkCamera, modalOpen, opticalZoomPosition, presets, speed, state.cameras, viewerFullscreen, zoomRange]);
 
   useEffect(() => {
-    if (!activeCamera) {
-      setPresets([]);
-      setStreamInfo({});
-      setProfile(undefined);
-      setIrLights(undefined);
-      setWhiteLed(undefined);
-      setSnapshotUrl('');
-      setFallbackUrl('');
-      setStatus(null);
-      setMessage('');
-      return;
+    if (activeCamera) void loadCameraProfile(activeCamera.id);
+  }, [cameraWork]);
+
+  useEffect(() => {
+    if (activeCamera && canZoom && !viewChanging.current && activeCamera.streamChannel === 1 && teleZoomPending.current === activeCamera.id) {
+      teleZoomPending.current = null;
+      zoomToMax();
     }
-    void loadCameraProfile(activeCamera.id);
+  }, [cameraWork, canZoom]);
+
+  useEffect(() => {
+    if (!activeCamera || !isReolinkCamera) return;
+    if (!controls.presets) { setPresets([]); return; }
+    let cancelled = false;
+    const current = cameraWork.capture('presets');
+    void window.fjoscam.getPresets(activeCamera.id).then((value) => {
+      if (!cancelled && current()) setPresets(value);
+    }).catch((error) => { if (!cancelled && current()) setMessage(errorMessage(error)); });
+    return () => { cancelled = true; };
+  }, [cameraWork, controls.presets, isReolinkCamera]);
+
+  useEffect(() => { void stopHeldPtz(); }, [controls.move, controls.zoom, controls.focus]);
+
+  useEffect(() => {
+    if (!activeCamera || viewChanging.current) return;
     if (!isStreamEnabled) {
       clearCurrentStream();
       setMessage('Disconnected');
@@ -258,12 +415,8 @@ export default function App() {
       return;
     }
     void loadWebRtcRuntime(activeCamera.id);
-  }, [activeCamera?.id, activeCamera?.streamChannel, activeCamera?.lowLatency, isStreamEnabled]);
-
-  useEffect(() => {
-    if (!showSettings || editingId) return;
-    void scanForCameras();
-  }, [showSettings, editingId]);
+    return () => { runtimeLoadRef.current += 1; };
+  }, [cameraWork, isStreamEnabled]);
 
   useEffect(() => {
     applyWebRtcAudioSettings();
@@ -273,95 +426,130 @@ export default function App() {
   // cameras change zoom on their own (auto tracking), so light polling is needed
   // for the slider and keyboard nudges to work from the camera's real position.
   useEffect(() => {
-    zoomTargetRef.current = null;
     zoomInteractionRef.current = 0;
-    if (!activeCamera || !isReolinkCamera) {
+    if (!activeCamera || !canZoom) {
       setOpticalZoomPosition(0);
       setZoomRange(defaultZoomRange);
       return;
     }
+    if (!isStreamEnabled) return;
     let cancelled = false;
+    let pending = false;
+    let failures = 0;
+    let visibilityRevision = 0;
+    let timer: number | undefined;
     const cameraId = activeCamera.id;
-    const refresh = () => {
-      if (zoomBusyRef.current || zoomTargetRef.current !== null) return;
-      if (Date.now() - zoomInteractionRef.current < 1500) return;
-      window.fjoscam.getZoomFocus(cameraId)
-        .then((value) => {
-          if (cancelled || zoomBusyRef.current || zoomTargetRef.current !== null) return;
-          applyZoomState(value);
-        })
-        .catch(() => undefined);
+    const schedule = () => {
+      if (!cancelled && !document.hidden) timer = window.setTimeout(refresh, Math.min(30000, 3000 * 2 ** failures));
     };
-    refresh();
-    const timer = window.setInterval(refresh, 3000);
+    const refresh = async () => {
+      if (cancelled || document.hidden || pending) return;
+      if (viewChanging.current || zoomBusyRef.current || zoomTargetRef.current !== null || Date.now() - zoomInteractionRef.current < 1500) {
+        schedule(); return;
+      }
+      pending = true;
+      const visibleAtStart = visibilityRevision;
+      const current = cameraWork.capture('zoom-read');
+      try {
+        const value = await window.fjoscam.getZoomFocus(cameraId);
+        if (cancelled || document.hidden || visibleAtStart !== visibilityRevision || !current()) return;
+        if (!Number.isFinite(value.zoom)) { failures = Math.min(failures + 1, 4); return; }
+        failures = 0;
+        if (!zoomBusyRef.current && zoomTargetRef.current === null) applyZoomState(value);
+      } catch { if (visibleAtStart === visibilityRevision) failures = Math.min(failures + 1, 4); }
+      finally { pending = false; schedule(); }
+    };
+    const visibility = () => {
+      visibilityRevision++;
+      window.clearTimeout(timer);
+      failures = 0;
+      if (!document.hidden) void refresh();
+    };
+    void refresh();
+    document.addEventListener('visibilitychange', visibility);
     return () => {
       cancelled = true;
-      window.clearInterval(timer);
+      window.clearTimeout(timer);
+      document.removeEventListener('visibilitychange', visibility);
     };
-  }, [activeCamera?.id, isReolinkCamera]);
+  }, [cameraWork, canZoom, isStreamEnabled]);
 
   async function loadCameraProfile(id: string) {
     const camera = state.cameras.find((item) => item.id === id);
-    if (camera?.kind !== 'reolink') {
+    if (camera?.kind && camera.kind !== 'reolink') {
       setProfile(undefined);
       setIrLights(undefined);
       setWhiteLed(undefined);
       return;
     }
-    const nextProfile = await window.fjoscam.getProfile(id);
-    setProfile(nextProfile);
-    if (nextProfile?.capabilities.irLights) setIrLights(await window.fjoscam.getIrLights(id));
-    else setIrLights(undefined);
-    setWhiteLed(await window.fjoscam.getWhiteLed(id));
+    const current = cameraWork.capture('profile');
+    const currentIr = cameraWork.capture('ir');
+    const currentLed = cameraWork.capture('white-led-read');
+    try {
+      const nextProfile = await window.fjoscam.getProfile(id);
+      if (!current()) return;
+      profileOwner.current = cameraWork;
+      setProfile(nextProfile);
+      await Promise.all([
+        nextProfile?.capabilities.irLights ? window.fjoscam.getIrLights(id).then((value) => {
+          if (currentIr() && !irWriter.busy()) setIrLights(value);
+        }).catch((error) => { if (currentIr()) setMessage(errorMessage(error)); }) : undefined,
+        nextProfile?.capabilities.whiteLed ? window.fjoscam.getWhiteLed(id).then((value) => {
+          if (currentLed() && !lightWriter.busy()) setWhiteLed(value);
+        }).catch((error) => { if (currentLed()) setMessage(errorMessage(error)); }) : undefined,
+      ]);
+    } catch (error) { if (current()) setMessage(errorMessage(error)); }
   }
 
   async function refresh() {
-    setState(await window.fjoscam.getState());
-  }
-
-  async function scanForCameras() {
-    setDiscoveryBusy(true);
-    setDiscoveryMessage('Searching local network...');
-    try {
-      const results = await window.fjoscam.discoverCameras();
-      setDiscoveredCameras(results);
-      setDiscoveryMessage(results.length > 0 ? `Found ${results.length} camera${results.length === 1 ? '' : 's'}.` : 'No cameras found. You can still add one manually.');
-    } catch (error) {
-      setDiscoveryMessage(errorMessage(error));
-    } finally {
-      setDiscoveryBusy(false);
-    }
+    await changeState(() => window.fjoscam.getState(), false);
   }
 
   async function setFullscreenMode(enabled: boolean) {
-    setViewerFullscreen(enabled);
-    await window.fjoscam.setFullscreen(enabled);
+    try { await window.fjoscam.setFullscreen(enabled); }
+    catch { setMessage('Could not change fullscreen mode. Try the View menu.'); }
   }
 
   async function checkForUpdates() {
     setShowUpdateDialog(true);
-    setUpdateStatus(await window.fjoscam.checkForUpdates());
+    await requestUpdate(() => window.fjoscam.checkForUpdates(), 'Could not check for updates. Try again.');
   }
 
   async function downloadUpdate() {
-    setUpdateStatus(await window.fjoscam.downloadUpdate());
+    await requestUpdate(() => window.fjoscam.downloadUpdate(), 'Could not download the update. Try again.');
   }
 
   async function installUpdate() {
-    await window.fjoscam.quitAndInstallUpdate();
+    await requestUpdate(() => window.fjoscam.quitAndInstallUpdate(), 'Could not start the update installer. Try again.');
+  }
+
+  async function requestUpdate(operation: () => Promise<UpdateStatus | void>, failure: string) {
+    const revision = ++updateRevision.current;
+    try {
+      const next = await operation();
+      if (mounted.current && revision === updateRevision.current && next) setUpdateStatus(next);
+    } catch {
+      if (mounted.current && revision === updateRevision.current) {
+        setUpdateStatus({ state: 'error', currentVersion: appVersion, message: failure });
+      }
+    }
   }
 
   async function selectAdjacentCamera(direction: -1 | 1) {
-    if (state.cameras.length === 0) return;
-    const currentIndex = Math.max(0, state.cameras.findIndex((camera) => camera.id === state.activeCameraId));
-    const nextIndex = (currentIndex + direction + state.cameras.length) % state.cameras.length;
-    await selectCamera(state.cameras[nextIndex].id);
+    await changeState((current) => {
+      if (current.cameras.length === 0) return Promise.resolve(current);
+      const index = Math.max(0, current.cameras.findIndex((camera) => camera.id === current.activeCameraId));
+      return window.fjoscam.setActiveCamera(current.cameras[(index + direction + current.cameras.length) % current.cameras.length].id);
+    });
   }
 
   async function loadWebRtcRuntime(id: string) {
     const loadId = runtimeLoadRef.current + 1;
     runtimeLoadRef.current = loadId;
-    setMessage('Starting WebRTC live...');
+    const currentView = cameraWork.capture();
+    const current = () => currentView() && runtimeLoadRef.current === loadId;
+    setMessage('');
+    setStreamFailure(false);
     setStatus(null);
     try {
       setFallbackUrl('');
@@ -369,132 +557,109 @@ export default function App() {
       const camera = state.cameras.find((item) => item.id === id);
       if (camera?.kind === 'panasonic') {
         const mjpegUrl = await window.fjoscam.getMjpegUrl(id);
-        if (runtimeLoadRef.current !== loadId) return;
+        if (!current()) return;
         setSnapshotUrl(mjpegUrl);
-        setPresets(Array.from({ length: 10 }, (_item, index) => ({ id: index + 1, name: `Preset ${index + 1}` })));
+        setPresets(panasonicPresets());
         setStreamInfo({});
         setStreamRevision((value) => value + 1);
-        setMessage('Panasonic MJPEG live');
-        setStatus({ ok: true, message: 'Panasonic MJPEG live' });
+        setMessage('');
+
         return;
       }
       if (camera?.kind === 'generic') {
+        streamOwnerRef.current = id;
         const webRtcStream = await window.fjoscam.getWebRtcStream(id);
-        if (runtimeLoadRef.current !== loadId) return;
+        if (!current()) return;
         setSnapshotUrl(webRtcStream.pageUrl);
         setPresets([]);
         setStreamInfo({});
         setProfile(undefined);
         setFallbackUrl('');
         setStreamRevision((value) => value + 1);
-        setMessage('Generic WebRTC live');
-        setStatus({ ok: true, message: 'Generic WebRTC live' });
+        setMessage('');
+
         return;
       }
-      const nextStreamInfo: { high?: StreamInfo; low?: StreamInfo } = await window.fjoscam.getStreamInfo(id).catch(() => ({}));
-      if (runtimeLoadRef.current !== loadId) return;
-      setStreamInfo(nextStreamInfo);
+      // RTSP playback must not wait for the camera's HTTP metadata API.
+      const metadataCurrent = cameraWork.capture('stream-info');
+      void window.fjoscam.getStreamInfo(id).then((info) => {
+        if (current() && metadataCurrent()) setStreamInfo(info);
+      }).catch(() => undefined);
 
+      streamOwnerRef.current = id;
       const webRtcStream = await window.fjoscam.getWebRtcStream(id);
-      if (runtimeLoadRef.current !== loadId) return;
+      if (!current()) return;
       setSnapshotUrl(webRtcStream.pageUrl);
       setStreamRevision((value) => value + 1);
-      setMessage('WebRTC live');
-      setStatus({ ok: true, message: 'WebRTC live' });
+      setMessage('');
 
-      const [nextPresets, nextFallbackUrl] = await Promise.all([
-        window.fjoscam.getPresets(id).catch(() => []),
-        window.fjoscam.getMjpegUrl(id).catch(() => ''),
-      ]);
-      if (runtimeLoadRef.current !== loadId) return;
-      setPresets(nextPresets);
-      setStreamInfo(nextStreamInfo);
+
+      const nextFallbackUrl = await window.fjoscam.getMjpegUrl(id).catch(() => '');
+      if (!current()) return;
       setFallbackUrl(nextFallbackUrl);
     } catch (error) {
-      setMessage(errorMessage(error));
+      if (current()) { setStreamFailure(true); setMessage(errorMessage(error)); }
     }
   }
 
   async function saveCamera(event: FormEvent) {
     event.preventDefault();
-    setBusy(true);
-    setMessage('');
+    const pending = changeState(() => window.fjoscam.saveCamera(form, editingId));
+    const finish = beginBusy();
     try {
-      const nextState = await window.fjoscam.saveCamera(form, editingId);
-      setState(nextState);
+      if (!await pending) return;
       setForm(defaultInput);
       setEditingId(undefined);
       setShowSettings(false);
-    } catch (error) {
-      setMessage(errorMessage(error));
-    } finally {
-      setBusy(false);
-    }
+    } finally { finish(); }
   }
 
   async function selectCamera(id: string) {
-    setState(await window.fjoscam.setActiveCamera(id));
+    await changeState(() => window.fjoscam.setActiveCamera(id));
   }
 
   async function setViewChannel(channel: number) {
     if (!activeCamera) return;
-    clearCurrentStream();
-    const nextState = await window.fjoscam.setStreamChannel(activeCamera.id, channel);
-    setState(nextState);
-    resetDigitalZoom();
-    if (isStreamEnabled) window.setTimeout(() => void loadWebRtcRuntime(activeCamera.id), 120);
-    // The tele lens starts fully zoomed in for maximum magnification.
-    if (channel === 1 && isReolinkCamera) zoomToMax();
+    const pending = changeState(() => window.fjoscam.setStreamChannel(activeCamera.id, channel));
+    // Apply the tele-lens maximum only in the committed, updated view.
+    if (channel === 1 && isReolinkCamera) teleZoomPending.current = activeCamera.id;
+    await pending;
   }
 
   async function setStreamQuality(lowLatency: boolean) {
     if (!activeCamera) return;
-    clearCurrentStream();
-    const nextState = await window.fjoscam.setStreamQuality(activeCamera.id, lowLatency);
-    setState(nextState);
-    resetDigitalZoom();
-    if (isStreamEnabled) window.setTimeout(() => void loadWebRtcRuntime(activeCamera.id), 120);
+    await changeState(() => window.fjoscam.setStreamQuality(activeCamera.id, lowLatency));
   }
 
   async function testCamera(id = activeCamera?.id) {
-    if (!id) return;
-    setBusy(true);
+    if (!id || viewChanging.current) return;
+    const current = cameraWork.capture('presets');
+    const metadataCurrent = cameraWork.capture('stream-info');
+    const finish = beginBusy();
     setMessage('');
     try {
       const result = await window.fjoscam.testCamera(id);
+      if (!current()) return;
       setStatus(result);
-      if (result.presets) setPresets(result.presets);
-      if (result.streams) setStreamInfo(result.streams);
+      if (result.presets && controls.presets) setPresets(result.presets);
+      if (result.streams && metadataCurrent()) setStreamInfo(result.streams);
       if (result.cameraName && activeCamera && activeCamera.name !== result.cameraName) {
-        const nextState = await window.fjoscam.saveCamera(
-          {
-            ...activeCamera,
-            name: result.cameraName,
-            password: '',
-          },
-          activeCamera.id,
-        );
-        setState(nextState);
+        await changeState(async (latest) => {
+          const camera = latest.cameras.find((item) => item.id === id);
+          // Never restore settings captured before another queued edit.
+          if (!current() || !camera) return latest;
+          return window.fjoscam.saveCamera({ ...camera, name: result.cameraName!, password: '' }, id);
+        }, false);
       }
     } catch (error) {
-      setMessage(errorMessage(error));
-    } finally {
-      setBusy(false);
-    }
+      if (current()) setMessage(errorMessage(error));
+    } finally { finish(); }
   }
 
   async function toggleStream() {
     if (!activeCamera) return;
-    if (isStreamEnabled) {
-      setIsStreamEnabled(false);
-      clearCurrentStream();
-      setMessage('Disconnected');
-      setStatus(null);
-      return;
-    }
-
-    setIsStreamEnabled(true);
-    await loadWebRtcRuntime(activeCamera.id);
+    if (isStreamEnabled) clearCurrentStream();
+    setIsStreamEnabled((enabled) => !enabled);
   }
 
   async function removeCamera(id: string) {
@@ -502,84 +667,79 @@ export default function App() {
     const name = camera?.name ?? 'this camera';
     const confirmed = window.confirm(`Delete camera "${name}" from Fjoscam?\n\nThis only removes it from Fjoscam. The camera itself is not changed.`);
     if (!confirmed) return;
-    setState(await window.fjoscam.removeCamera(id));
-    setMessage(`Deleted ${name}`);
+    await changeState(() => window.fjoscam.removeCamera(id));
   }
 
   async function moveCamera(id: string, direction: -1 | 1) {
-    const index = state.cameras.findIndex((camera) => camera.id === id);
-    const targetIndex = index + direction;
-    if (index < 0 || targetIndex < 0 || targetIndex >= state.cameras.length) return;
-    const nextCameras = [...state.cameras];
-    [nextCameras[index], nextCameras[targetIndex]] = [nextCameras[targetIndex], nextCameras[index]];
-    setState(await window.fjoscam.reorderCameras(nextCameras.map((camera) => camera.id)));
+    await changeState((current) => {
+      const index = current.cameras.findIndex((camera) => camera.id === id);
+      const targetIndex = index + direction;
+      if (index < 0 || targetIndex < 0 || targetIndex >= current.cameras.length) return Promise.resolve(current);
+      const nextCameras = [...current.cameras];
+      [nextCameras[index], nextCameras[targetIndex]] = [nextCameras[targetIndex], nextCameras[index]];
+      return window.fjoscam.reorderCameras(nextCameras.map((camera) => camera.id));
+    }, false);
   }
 
   async function changeIrMode(mode: IrLightMode) {
-    if (!activeCamera) return;
+    if (!activeCamera || !controls.ir || viewChanging.current) return;
+    const current = cameraWork.capture('ir');
     setMessage('Updating IR lights...');
-    try {
-      await window.fjoscam.setIrLights(activeCamera.id, mode);
-      setIrLights((current) => (current ? { ...current, mode } : { mode, options: ['auto', 'on', 'off'] }));
-      setMessage('IR lights updated');
-    } catch (error) {
-      setMessage(errorMessage(error));
-    }
+    setIrLights((value) => (value ? { ...value, mode } : { mode, options: ['auto', 'on', 'off'] }));
+    irWriter.push({ mode }, { current, success: () => setMessage('IR lights updated'), error: (error) => setMessage(errorMessage(error)) });
   }
 
   // Spotlight behaviour: 0 = off (IR night vision takes over), 1 = auto at
   // night on detection, 3 = the camera's own schedule.
   async function setCameraLightMode(mode: 0 | 1 | 3) {
-    if (!activeCamera) return;
+    if (!activeCamera || !controls.light || viewChanging.current) return;
+    const current = cameraWork.capture('white-led-write');
+    cameraWork.capture('white-led-read');
     setMessage('Updating spotlight...');
-    try {
-      await window.fjoscam.setWhiteLed(activeCamera.id, { mode });
-      setWhiteLed({ ...whiteLed, enabled: mode !== 0, mode });
-      setMessage(mode === 0 ? 'Spotlight off - IR night vision active' : mode === 1 ? 'Spotlight auto (motion at night)' : 'Spotlight on camera schedule');
-    } catch (error) {
-      setMessage(errorMessage(error));
-    }
+    setWhiteLed((value) => ({ ...value, enabled: mode !== 0, mode }));
+    lightWriter.push({ mode }, { current,
+      success: () => setMessage(mode === 0 ? 'Spotlight off - IR night vision active' : mode === 1 ? 'Spotlight auto (motion at night)' : 'Spotlight on camera schedule'),
+      error: (error) => setMessage(errorMessage(error)) });
   }
 
   async function setLegacyCameraLight(enabled: boolean) {
-    if (!activeCamera) return;
+    if (!activeCamera || !controls.light || viewChanging.current) return;
+    const current = cameraWork.capture('white-led-write');
+    cameraWork.capture('white-led-read');
     const brightness = enabled ? (whiteLed?.brightness && whiteLed.brightness > 0 ? whiteLed.brightness : 85) : 0;
     setMessage('Updating spotlight...');
-    try {
-      await window.fjoscam.setWhiteLed(activeCamera.id, { enabled, brightness });
-      setWhiteLed({ ...whiteLed, enabled, brightness });
-      setMessage(enabled ? 'Spotlight on' : 'Spotlight off');
-    } catch (error) {
-      setMessage(errorMessage(error));
-    }
+    setWhiteLed((value) => ({ ...value, enabled, brightness }));
+    lightWriter.push({ enabled, brightness }, { current, success: () => setMessage(enabled ? 'Spotlight on' : 'Spotlight off'),
+      error: (error) => setMessage(errorMessage(error)) });
   }
 
   async function setCameraLightBrightness(brightness: number) {
-    if (!activeCamera) return;
-    setWhiteLed({ ...whiteLed, enabled: (whiteLed?.mode ?? 0) !== 0, brightness, supportsBrightness: true });
-    try {
-      await window.fjoscam.setWhiteLed(activeCamera.id, { brightness });
-      setMessage(`Spotlight brightness ${brightness}%`);
-    } catch (error) {
-      setMessage(errorMessage(error));
-    }
+    if (!activeCamera || !controls.light || viewChanging.current) return;
+    const current = cameraWork.capture('white-led-write');
+    cameraWork.capture('white-led-read');
+    setWhiteLed((value) => ({ ...value, enabled: value?.enabled ?? false, brightness, supportsBrightness: true }));
+    setMessage('Updating spotlight...');
+    lightWriter.push({ brightness }, { current, success: () => setMessage(`Spotlight brightness ${brightness}%`),
+      error: (error) => setMessage(errorMessage(error)) }, 150);
   }
 
   async function playSiren() {
-    if (!activeCamera) return;
+    if (!activeCamera || !controls.siren || viewChanging.current) return;
+    const current = cameraWork.capture('siren');
     const confirmed = window.confirm(`Play siren on "${activeCamera.name}"?`);
     if (!confirmed) return;
     setMessage('Playing siren...');
     try {
       await window.fjoscam.playSiren(activeCamera.id);
+      if (!current()) return;
       setMessage('Siren command sent');
     } catch (error) {
-      setMessage(errorMessage(error));
+      if (current()) setMessage(errorMessage(error));
     }
   }
 
   async function fetchCameraName() {
-    setBusy(true);
+    const finish = beginBusy();
     setMessage('');
     try {
       const cameraName = await window.fjoscam.getDeviceName(form);
@@ -587,11 +747,12 @@ export default function App() {
         setMessage('Camera did not return a name.');
         return;
       }
-      setForm({ ...form, name: cameraName });
+      // A slow name lookup must not restore an old address or certificate exception.
+      setForm((current) => current === form ? { ...current, name: cameraName } : current);
     } catch (error) {
       setMessage(errorMessage(error));
     } finally {
-      setBusy(false);
+      finish();
     }
   }
 
@@ -603,6 +764,12 @@ export default function App() {
       kind: isPanasonic ? 'panasonic' : 'reolink',
       name: isPanasonic ? 'Panasonic' : discoveryDisplayName(camera),
       host: camera.host,
+      password: '',
+      streamUrl: '',
+      httpsTrust: undefined,
+      rtspsTrust: undefined,
+      allowInsecureOnvif: false,
+      onvifPort: camera.ports.onvif ?? 8000,
       protocol: camera.ports.https ? 'https' : 'http',
       httpPort,
       rtspPort: camera.ports.rtsp ?? 554,
@@ -619,6 +786,9 @@ export default function App() {
     setForm({
       ...form,
       kind,
+      httpsTrust: kind === 'generic' ? undefined : form.httpsTrust,
+      rtspsTrust: undefined,
+      allowInsecureOnvif: false,
       ...(kind === 'panasonic'
         ? {
             name: form.name || 'Panasonic',
@@ -648,20 +818,46 @@ export default function App() {
       kind: camera.kind ?? 'reolink',
       streamChannel: camera.streamChannel ?? camera.channel,
       password: '',
+      streamUrl: '',
     });
     setEditingId(camera.id);
     setShowSettings(true);
   }
 
+  function closeSettings() {
+    setShowSettings(false);
+    setForm(defaultInput);
+    setEditingId(undefined);
+  }
+
   async function send(command: PtzCommand) {
-    if (!activeCamera || activeCamera.kind === 'generic') return;
+    if (command.kind === 'stop' && ptzCameraIdRef.current) {
+      await stopHeldPtz();
+      return;
+    }
+    if (!activeCamera || viewChanging.current || activeCamera.kind === 'generic') return;
+    if (!allowsPtz(command, controls)) return;
+    const current = cameraWork.capture();
+    const cameraId = activeCamera.id;
+    if (['move', 'zoom', 'focus'].includes(command.kind)) ptzCameraIdRef.current = cameraId;
     try {
-      await window.fjoscam.sendPtz(activeCamera.id, command);
+      await window.fjoscam.sendPtz(cameraId, command);
+      if (!current()) return;
       // Preset recall usually moves the optical zoom as well.
       if (command.kind === 'preset' && isReolinkCamera) scheduleZoomRefresh(2500);
     } catch (error) {
-      setMessage(errorMessage(error));
+      if (current()) setMessage(errorMessage(error));
     }
+  }
+
+  async function stopHeldPtz() {
+    const current = cameraWork.capture();
+    const cameraId = ptzCameraIdRef.current;
+    ptzCameraIdRef.current = null;
+    zoomHoldRef.current = false;
+    if (!cameraId) return;
+    try { await window.fjoscam.sendPtz(cameraId, { kind: 'stop' }); }
+    catch (error) { if (current()) setMessage(errorMessage(error)); }
   }
 
   function startZoomHold(direction: 'in' | 'out') {
@@ -686,32 +882,36 @@ export default function App() {
   // sent unclamped: the main process clamps against the camera's real range, so a
   // stale local range can never zoom the wrong way.
   function queueZoomPosition(position: number) {
-    if (!activeCamera || !isReolinkCamera) return;
+    if (!activeCamera || !canZoom || viewChanging.current) return;
+    const current = captureZoomWork();
+    cameraWork.capture('zoom-read');
     const target = Math.round(position);
     zoomTargetRef.current = target;
     zoomInteractionRef.current = Date.now();
     setOpticalZoomPosition(clamp(target, zoomRange.min, zoomRange.max));
     if (zoomSendTimerRef.current !== null) window.clearTimeout(zoomSendTimerRef.current);
-    zoomSendTimerRef.current = window.setTimeout(() => void flushZoomPosition(), 200);
+    zoomSendTimerRef.current = window.setTimeout(() => {
+      zoomSendTimerRef.current = null;
+      if (current()) void flushZoomPosition(activeCamera.id, current);
+    }, 200);
   }
 
-  async function flushZoomPosition() {
-    if (zoomBusyRef.current) return;
+  async function flushZoomPosition(cameraId: string, current: () => boolean) {
+    if (!current() || zoomBusyRef.current) return;
     const target = zoomTargetRef.current;
-    const cameraId = activeCameraIdRef.current;
-    if (target === null || cameraId === null) return;
+    if (target === null) return;
     zoomTargetRef.current = null;
     zoomBusyRef.current = true;
     try {
       const result = await window.fjoscam.setZoomPosition(cameraId, target);
-      if (zoomTargetRef.current === null && activeCameraIdRef.current === cameraId) {
-        applyZoomState(result);
-      }
+      if (current() && zoomTargetRef.current === null) applyZoomState(result);
     } catch (error) {
-      setMessage(errorMessage(error));
+      if (current()) setMessage(errorMessage(error));
     } finally {
-      zoomBusyRef.current = false;
-      if (zoomTargetRef.current !== null) void flushZoomPosition();
+      if (current()) {
+        zoomBusyRef.current = false;
+        if (zoomTargetRef.current !== null) void flushZoomPosition(cameraId, current);
+      }
     }
   }
 
@@ -726,18 +926,21 @@ export default function App() {
   }
 
   function scheduleZoomRefresh(delayMs: number) {
-    const cameraId = activeCameraIdRef.current;
-    if (!cameraId || !isReolinkCamera) return;
-    window.setTimeout(() => {
-      if (activeCameraIdRef.current !== cameraId) return;
+    if (!activeCamera || !canZoom || viewChanging.current) return;
+    const cameraId = activeCamera.id;
+    const current = captureZoomWork();
+    const timer = window.setTimeout(() => {
+      zoomRefreshTimers.current.delete(timer);
+      if (!current() || zoomBusyRef.current || zoomTargetRef.current !== null) return;
+      const currentRead = cameraWork.capture('zoom-read');
       window.fjoscam.getZoomFocus(cameraId)
         .then((state) => {
-          if (activeCameraIdRef.current !== cameraId) return;
-          if (zoomBusyRef.current || zoomTargetRef.current !== null) return;
+          if (!current() || !currentRead() || zoomBusyRef.current || zoomTargetRef.current !== null) return;
           applyZoomState(state);
         })
         .catch(() => undefined);
     }, delayMs);
+    zoomRefreshTimers.current.add(timer);
   }
 
   function changeFocus(value: number) {
@@ -759,7 +962,8 @@ export default function App() {
   }
 
   async function saveCurrentPreset() {
-    if (!activeCamera || !isReolinkCamera) return;
+    if (!activeCamera || !controls.presetWrite || viewChanging.current) return;
+    const current = cameraWork.capture('presets');
     const presetId = Number(presetDraftId);
     if (!Number.isFinite(presetId) || presetId < 1 || presetId > 64) {
       setMessage('Preset number must be between 1 and 64.');
@@ -769,41 +973,46 @@ export default function App() {
 
     const name = presetDraftName.trim() || `Preset ${Math.round(presetId)}`;
 
-    setBusy(true);
+    const finish = beginBusy();
     setMessage('Saving preset...');
     try {
       const nextPresets = await window.fjoscam.savePreset(activeCamera.id, presetId, name);
+      if (!current()) return;
       setPresets(nextPresets);
       setShowPresetDialog(false);
       setStatus({ ok: true, message: `Saved preset ${Math.round(presetId)}` });
       setMessage(`Saved preset ${Math.round(presetId)}`);
     } catch (error) {
+      if (!current()) return;
       const message = errorMessage(error);
       setStatus({ ok: false, message });
       setMessage(message);
     } finally {
-      setBusy(false);
+      finish();
     }
   }
 
   async function deletePreset(preset: Preset) {
-    if (!activeCamera || !isReolinkCamera) return;
+    if (!activeCamera || !controls.presetWrite || viewChanging.current) return;
+    const current = cameraWork.capture('presets');
     const confirmed = window.confirm(`Delete "${preset.name}"?`);
     if (!confirmed) return;
 
-    setBusy(true);
+    const finish = beginBusy();
     setMessage(`Deleting preset ${preset.id}...`);
     try {
       const nextPresets = await window.fjoscam.deletePreset(activeCamera.id, preset.id);
+      if (!current()) return;
       setPresets(nextPresets);
       setStatus({ ok: true, message: `Deleted preset ${preset.id}` });
       setMessage(`Deleted preset ${preset.id}`);
     } catch (error) {
+      if (!current()) return;
       const message = errorMessage(error);
       setStatus({ ok: false, message });
       setMessage(message);
     } finally {
-      setBusy(false);
+      finish();
     }
   }
 
@@ -890,11 +1099,6 @@ export default function App() {
     dragRef.current.active = false;
   }
 
-  async function toggleZoomChannel() {
-    if (!activeCamera || !hasSecondaryLens) return;
-    await setViewChannel((activeCamera.streamChannel ?? 0) === 1 ? 0 : 1);
-  }
-
   function applyDigitalZoom(event: WheelEvent<HTMLDivElement>) {
     if (!stageRef.current) return;
     const bounds = getActiveMediaBounds();
@@ -935,17 +1139,6 @@ export default function App() {
     setDigitalPan(clampPan(nextPan, nextZoom, bounds));
   }
 
-  function setDigitalZoomLevel(nextZoom: number) {
-    const zoom = clamp(nextZoom, 1, 4);
-    if (zoom === 1) {
-      resetDigitalZoom();
-      return;
-    }
-    setDigitalZoom(zoom);
-    setDigitalOrigin({ x: 50, y: 50 });
-    setDigitalPan({ x: 0, y: 0 });
-  }
-
   function resetDigitalZoom() {
     setDigitalZoom(1);
     setDigitalPan({ x: 0, y: 0 });
@@ -967,47 +1160,24 @@ export default function App() {
 
   const activeStreamInfo = activeCamera?.lowLatency ? streamInfo.low : streamInfo.high;
   const streamDetail = activeCamera
-    ? isStreamEnabled && snapshotUrl
-      ? `${activeCamera.kind === 'panasonic' ? 'Panasonic MJPEG live' : `WebRTC live${formatStreamInfo(activeStreamInfo)}`}${digitalZoom > 1 ? ` · Digital zoom ${digitalZoom.toFixed(1)}x` : ''}`
-      : 'Stream disconnected'
-    : '';
+    ? `${playbackText}${playback.state === 'live' ? formatStreamInfo(activeStreamInfo) : ''}${digitalZoom > 1 ? ` · Digital zoom ${digitalZoom.toFixed(1)}x` : ''}` : '';
 
   function handleStreamError() {
-    if (!isStreamEnabled) return;
-    if (fallbackUrl) {
-      setSnapshotUrl(fallbackUrl);
-      setMessage('WebRTC stream unavailable. Showing MJPEG fallback.');
-    }
+    if (isStreamEnabled) setStreamFailure(true);
   }
 
-  function handleVideoReady(event: React.SyntheticEvent<HTMLVideoElement>) {
-    event.currentTarget.play().catch(() => undefined);
-    setMessage('Connected');
-    setStatus({ ok: true, message: 'Connected' });
+  function reconnectStream() {
+    if (!activeCamera) return;
+    setStreamFailure(false);
+    setIsStreamEnabled(true);
+    // A new view generation cancels old observations and re-registers the
+    // configured stream. No automatic quality change or competing timer.
+    setCameraConfigRevision((value) => value + 1);
   }
 
   function applyWebRtcAudioSettings() {
-    const settings = { muted: audioMuted || audioVolume === 0, volume: clamp(audioVolume / 100, 0, 1) };
-    applyIframeVideoAudio(settings);
-    void window.fjoscam.setStreamAudio(settings.muted, settings.volume);
-  }
-
-  function applyIframeVideoAudio(settings: { muted: boolean; volume: number }): boolean {
-    const frame = webRtcFrameRef.current;
-    const video = frame?.contentDocument?.querySelector('video');
-    if (!video) return false;
-    video.muted = settings.muted;
-    video.volume = settings.volume;
-    return true;
-  }
-
-  function scheduleIframeAudioApply(attempts: number) {
-    if (audioApplyTimerRef.current !== null) window.clearTimeout(audioApplyTimerRef.current);
-    const apply = (remaining: number) => {
-      if (applyIframeVideoAudio({ muted: audioMuted || audioVolume === 0, volume: clamp(audioVolume / 100, 0, 1) }) || remaining <= 0) return;
-      audioApplyTimerRef.current = window.setTimeout(() => apply(remaining - 1), 250);
-    };
-    apply(attempts);
+    void window.fjoscam.setStreamAudio(audioMuted || audioVolume === 0, clamp(audioVolume / 100, 0, 1))
+      .catch(() => { /* Playback remains usable if the frame is navigating. */ });
   }
 
   function setVolume(value: number) {
@@ -1016,26 +1186,21 @@ export default function App() {
     if (nextVolume > 0 && audioMuted) setAudioMuted(false);
   }
 
-  function handleImageReady() {
-    setMessage('Connected');
-    setStatus({ ok: true, message: 'Connected' });
-    scheduleIframeAudioApply(8);
-  }
-
   function clearCurrentStream() {
     runtimeLoadRef.current += 1;
+    releaseCurrentStream();
+    setStreamFailure(false);
     setSnapshotUrl('');
+    setFallbackUrl('');
   }
 
-  function getStageBounds() {
-    if (!stageRef.current) return null;
-    const bounds = stageRef.current.getBoundingClientRect();
-    return {
-      x: bounds.left,
-      y: bounds.top,
-      width: bounds.width,
-      height: bounds.height,
-    };
+  function releaseCurrentStream() {
+    const current = cameraWork.capture();
+    const id = streamOwnerRef.current;
+    streamOwnerRef.current = null;
+    if (id) void window.fjoscam.releaseStream(id).catch(() => {
+      if (mounted.current && current() && !streamOwnerRef.current) setMessage('Could not release the previous video stream. Reconnect to retry.');
+    });
   }
 
   function getActiveMediaBounds(): DOMRect {
@@ -1059,6 +1224,12 @@ export default function App() {
             </button>
           </div>
           {cameraEditMode && <div className="edit-mode-banner">Camera edit mode</div>}
+          {state.configurationNotice === 'recovered-from-backup' && (
+            <div className="configuration-notice" role="alert">
+              <strong>Camera settings recovered from backup.</strong>
+              <span>Recent changes may be missing. Check the camera list and settings.</span>
+            </div>
+          )}
 
           <div className="camera-list">
             {state.cameras.map((camera, index) => (
@@ -1090,7 +1261,7 @@ export default function App() {
         </section>
 
         <section className="sidebar-zone controls-zone">
-          <div className={`ptz-panel collapsible-panel ${ptzExpanded ? 'expanded' : ''}`}>
+          {activeCamera && activeCamera.kind !== 'generic' && <div className={`ptz-panel collapsible-panel ${ptzExpanded ? 'expanded' : ''}`}>
             <button className="panel-toggle" onClick={() => setPtzExpanded((value) => !value)}>
               <span>PTZ</span>
               <small>{ptzExpanded ? 'Hide' : `Speed ${speed}`}</small>
@@ -1098,13 +1269,14 @@ export default function App() {
 
             {ptzExpanded && (
               <div className="panel-body">
+                {isReolinkCamera && <p className="control-hint">{capabilitySummary(profile)}</p>}
                 <div className="ptz-grid">
                   {directions.map(({ direction, Icon, className }) => (
                     <button
                       key={direction}
                       className={`ptz-button ${className}`}
                       title={direction}
-                      disabled={!activeCamera}
+                      disabled={!allowsPtz({ kind: 'move', direction, speed }, controls)}
                       onMouseDown={() => void send({ kind: 'move', direction, speed })}
                       onMouseUp={() => void send({ kind: 'stop' })}
                       onMouseLeave={() => void send({ kind: 'stop' })}
@@ -1120,10 +1292,10 @@ export default function App() {
                 <label className="slider-label">
                   <span>Speed</span>
                   <strong>{speed}</strong>
-                  <input min="1" max="64" value={speed} type="range" onChange={(event) => setSpeed(Number(event.target.value))} />
+                  <input min="1" max="64" value={speed} disabled={!controls.move} type="range" onChange={(event) => setSpeed(Number(event.target.value))} />
                 </label>
 
-                {activeCamera && isReolinkCamera && (
+                {canZoom && (
                   <label className="slider-label zoom-position-control">
                     <span>Optical zoom</span>
                     <strong>{zoomPositionLabel(opticalZoomPosition, zoomRange)}</strong>
@@ -1140,7 +1312,7 @@ export default function App() {
 
                 <div className="quick-row">
                   <button
-                    disabled={!activeCamera}
+                    disabled={!controls.zoom}
                     onMouseDown={() => startZoomHold('out')}
                     onMouseUp={stopZoomHold}
                     onMouseLeave={stopZoomHold}
@@ -1149,7 +1321,7 @@ export default function App() {
                     <ZoomOut size={18} />
                   </button>
                   <button
-                    disabled={!activeCamera}
+                    disabled={!controls.zoom}
                     onMouseDown={() => startZoomHold('in')}
                     onMouseUp={stopZoomHold}
                     onMouseLeave={stopZoomHold}
@@ -1157,7 +1329,7 @@ export default function App() {
                   >
                     <ZoomIn size={18} />
                   </button>
-                  <button disabled={!activeCamera} onClick={() => void testCamera()} title="Refresh presets">
+                  <button disabled={!activeCamera} onClick={() => { void testCamera(); if (isReolinkCamera && activeCamera) void loadCameraProfile(activeCamera.id); }} title="Refresh presets">
                     {busy ? <Loader2 className="spin" size={18} /> : <RotateCcw size={18} />}
                   </button>
                 </div>
@@ -1169,6 +1341,7 @@ export default function App() {
                     min="1"
                     max="64"
                     value={focusSpeed}
+                    disabled={!controls.focus}
                     type="range"
                     onChange={(event) => changeFocus(Number(event.target.value))}
                     onMouseUp={stopFocus}
@@ -1177,19 +1350,19 @@ export default function App() {
                   />
                 </label>
                 <div className="quick-row">
-                  <button disabled={!activeCamera} onClick={() => void send({ kind: 'focus', direction: 'near', speed: focusSpeed })} title="Focus near">
+                  <button disabled={!controls.focus} onClick={() => void send({ kind: 'focus', direction: 'near', speed: focusSpeed })} title="Focus near">
                     <Focus size={18} />
                   </button>
-                  <button disabled={!activeCamera} onClick={() => void send({ kind: 'focus', direction: 'far', speed: focusSpeed })} title="Focus far">
+                  <button disabled={!controls.focus} onClick={() => void send({ kind: 'focus', direction: 'far', speed: focusSpeed })} title="Focus far">
                     <Eye size={18} />
                   </button>
-                  <button disabled={!activeCamera || !isReolinkCamera || busy} onClick={openPresetDialog} title="Save current PTZ preset">
+                  <button disabled={!controls.presetWrite || busy} onClick={openPresetDialog} title="Save current PTZ preset">
                     Save preset
                   </button>
                 </div>
               </div>
             )}
-          </div>
+          </div>}
 
           {activeCamera && profile && (
             <div className={`device-panel collapsible-panel ${controlsExpanded ? 'expanded' : ''}`}>
@@ -1219,7 +1392,7 @@ export default function App() {
               </label>
             )}
 
-            {whiteLed && (
+            {controls.light && whiteLed && (
               <div className="light-controls">
                 {whiteLed.supportsModes ? (
                   <div className="segmented-control" aria-label="Spotlight mode">
@@ -1299,6 +1472,9 @@ export default function App() {
               {busy ? <Loader2 className="spin" size={18} /> : isStreamEnabled ? <Pause size={18} /> : <Play size={18} />}
               {isStreamEnabled ? 'Disconnect' : 'Connect'}
             </button>
+            {activeCamera && isStreamEnabled && <button onClick={reconnectStream} disabled={busy}>Reconnect</button>}
+            {activeCamera && isStreamEnabled && fallbackUrl && snapshotUrl !== fallbackUrl && (streamFailure || playback.state === 'stalled' || playback.state === 'error') &&
+              <button onClick={() => { releaseCurrentStream(); setStreamFailure(false); setMessage(''); setSnapshotUrl(fallbackUrl); setStreamRevision((value) => value + 1); }}>Use MJPEG fallback</button>}
             {activeCamera && activeCamera.kind !== 'panasonic' && (
               <div className="audio-control" aria-label="Audio volume">
                 <button type="button" title={audioMuted ? 'Unmute' : 'Mute'} onClick={() => setAudioMuted((value) => !value)}>
@@ -1341,7 +1517,6 @@ export default function App() {
                   transform: `translate(${digitalPan.x}px, ${digitalPan.y}px) scale(${digitalZoom})`,
                   transformOrigin: `${digitalOrigin.x}% ${digitalOrigin.y}%`,
                 }}
-                onLoad={handleImageReady}
               />
             ) : snapshotUrl ? (
               <>
@@ -1357,16 +1532,15 @@ export default function App() {
                     transformOrigin: `${digitalOrigin.x}% ${digitalOrigin.y}%`,
                   }}
                   alt={`${activeCamera.name} live view`}
-                  onLoad={handleImageReady}
-                  onError={handleStreamError}
+                    onError={handleStreamError}
                 />
               </>
             ) : (
               <div className="stream-placeholder">
                 <Camera size={56} />
-                <strong>{isStreamEnabled ? 'WebRTC bridge running' : 'Stream disconnected'}</strong>
-                <span>{isStreamEnabled ? 'Connecting to low-latency WebRTC.' : 'Press Connect to start live view.'}</span>
-                <small>Hold mouse button in the picture to move PTZ. Use zoom buttons or mouse wheel for digital zoom.</small>
+                <strong>{isStreamEnabled ? 'Preparing playback' : 'Stream disconnected'}</strong>
+                <span>{isStreamEnabled ? 'Waiting for video frames.' : 'Press Connect to start live view.'}</span>
+                <small>{controls.move ? 'Hold mouse button in the picture to move PTZ. ' : ''}Use the mouse wheel for digital zoom.</small>
               </div>
             )
           ) : (
@@ -1382,10 +1556,10 @@ export default function App() {
           <div className="preset-list">
             {presets.map((preset) => (
               <span key={preset.id} className="preset-item">
-                <button className="preset-recall" disabled={!activeCamera} onClick={() => void send({ kind: 'preset', presetId: preset.id })}>
+                <button className="preset-recall" disabled={!controls.presets} onClick={() => void send({ kind: 'preset', presetId: preset.id })}>
                   {preset.name}
                 </button>
-                {cameraEditMode && isReolinkCamera && (
+                {cameraEditMode && controls.presetWrite && (
                   <button
                     className="preset-delete"
                     disabled={!activeCamera || busy}
@@ -1403,9 +1577,10 @@ export default function App() {
             ))}
             {activeCamera && presets.length === 0 && <span className="hint">No presets loaded yet. Press Test/refresh.</span>}
           </div>
-          <div className="stream-detail">{streamDetail}</div>
-          <div className={`status ${message === 'Connected' || status?.ok ? 'ok' : status ? 'bad' : ''}`}>
-            {message || status?.message || (activeCamera ? (isStreamEnabled ? 'Connecting...' : 'Disconnected') : 'No camera')}
+          <div className={`stream-detail ${streamFailure || playback.state === 'error' || playback.state === 'stalled' ? 'bad' : playback.state === 'live' ? 'ok' : ''}`} role="status" aria-label="Playback status">{streamDetail}</div>
+          {status?.scope && <span className={`camera-test-result ${status.scope === 'unverified' ? '' : status.ok ? 'ok' : 'bad'}`} aria-label="Camera test result">{status.message}</span>}
+          <div className={`status ${configurationError ? 'bad' : ''}`}>
+            {configurationError || message || (status?.scope ? '' : status?.message) || (!activeCamera ? 'No camera' : '')}
           </div>
         </footer>
       </section>
@@ -1432,11 +1607,11 @@ export default function App() {
       )}
 
       {showAbout && (
-        <div className="modal-backdrop" onMouseDown={() => setShowAbout(false)}>
+        <Modal title="About Fjoscam" onClose={() => setShowAbout(false)}>
           <div className="small-modal" onMouseDown={(event) => event.stopPropagation()}>
             <div className="modal-heading">
               <h2>About Fjoscam</h2>
-              <button type="button" className="icon-button" onClick={() => setShowAbout(false)}>
+              <button type="button" className="icon-button" aria-label="Close About Fjoscam" onClick={() => setShowAbout(false)}>
                 ×
               </button>
             </div>
@@ -1466,11 +1641,11 @@ export default function App() {
               </div>
             </section>
           </div>
-        </div>
+        </Modal>
       )}
 
       {showPresetDialog && (
-        <div className="modal-backdrop" onMouseDown={() => setShowPresetDialog(false)}>
+        <Modal title="Save PTZ preset" onClose={() => setShowPresetDialog(false)}>
           <form
             className="small-modal preset-modal"
             onMouseDown={(event) => event.stopPropagation()}
@@ -1481,7 +1656,7 @@ export default function App() {
           >
             <div className="modal-heading">
               <h2>Save PTZ preset</h2>
-              <button type="button" className="icon-button" onClick={() => setShowPresetDialog(false)}>
+              <button type="button" className="icon-button" aria-label="Close preset dialog" onClick={() => setShowPresetDialog(false)}>
                 ×
               </button>
             </div>
@@ -1495,15 +1670,15 @@ export default function App() {
               <button type="submit" disabled={busy}>{busy ? 'Saving...' : 'Save preset'}</button>
             </div>
           </form>
-        </div>
+        </Modal>
       )}
 
       {showUpdateDialog && updateStatus && (
-        <div className="modal-backdrop" onMouseDown={() => setShowUpdateDialog(false)}>
+        <Modal title="Fjoscam update" onClose={() => setShowUpdateDialog(false)}>
           <div className="small-modal" onMouseDown={(event) => event.stopPropagation()}>
             <div className="modal-heading">
               <h2>Fjoscam update</h2>
-              <button type="button" className="icon-button" onClick={() => setShowUpdateDialog(false)}>
+              <button type="button" className="icon-button" aria-label="Close update dialog" onClick={() => setShowUpdateDialog(false)}>
                 ×
               </button>
             </div>
@@ -1520,63 +1695,42 @@ export default function App() {
               <button type="button" onClick={() => setShowUpdateDialog(false)}>Lukk</button>
             </div>
           </div>
-        </div>
+        </Modal>
       )}
 
       {showSettings && (
-        <div className="modal-backdrop" onMouseDown={() => setShowSettings(false)}>
+        <Modal title={editingId ? 'Edit camera' : 'Add camera'} onClose={closeSettings}>
           <form className="settings-modal" onMouseDown={(event) => event.stopPropagation()} onSubmit={(event) => void saveCamera(event)}>
             <div className="modal-heading">
               <h2>{editingId ? 'Edit camera' : 'Add camera'}</h2>
-              <button type="button" className="icon-button" onClick={() => setShowSettings(false)}>
+              <button type="button" className="icon-button" aria-label="Close camera settings" onClick={closeSettings}>
                 ×
               </button>
             </div>
             {!editingId && (
-              <section className="discovery-panel">
-                <div className="discovery-heading">
-                  <div>
-                    <strong>Found cameras</strong>
-                    <span>{discoveryMessage || 'Search for ONVIF and RTSP cameras on this network.'}</span>
-                  </div>
-                  <button type="button" onClick={() => void scanForCameras()} disabled={discoveryBusy}>
-                    {discoveryBusy ? 'Searching...' : 'Search again'}
-                  </button>
-                </div>
-                {discoveredCameras.length > 0 && (
-                  <div className="discovery-list">
-                    {discoveredCameras.map((camera) => {
-                      const alreadyAdded = existingCameraHosts.has(camera.host);
-                      return (
-                        <button type="button" key={camera.id} className={`discovery-item ${alreadyAdded ? 'already-added' : ''}`} onClick={() => useDiscoveredCamera(camera)}>
-                          <span className="discovery-main">
-                            {alreadyAdded && <CheckCircle2 className="discovery-check" size={18} aria-label="Already added" />}
-                            <span>
-                              <strong>{discoveryDisplayName(camera)}</strong>
-                              <small>{camera.host} · {camera.source === 'ws-discovery' ? 'ONVIF discovery' : 'Port scan'}</small>
-                            </span>
-                          </span>
-                          <small>{discoveryPorts(camera)}</small>
-                        </button>
-                      );
-                    })}
-                  </div>
-                )}
-              </section>
+              <CameraDiscovery existingHosts={existingCameraHosts} onSelect={useDiscoveredCamera} />
             )}
             <div className="form-grid">
               <label>Camera type<select value={form.kind} onChange={(event) => setCameraKind(event.target.value as CameraInput['kind'])}><option value="reolink">Reolink LAN camera</option><option value="panasonic">Panasonic legacy MJPEG</option><option value="generic">Generic RTSP/RTSPS stream</option></select></label>
               <label>Name<span className="input-action"><input value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} /><button type="button" onClick={() => void fetchCameraName()} disabled={busy}>Fetch</button></span></label>
-              <label>IP / host<input value={form.host} onChange={(event) => setForm({ ...form, host: event.target.value })} /></label>
-              <label>Protocol<select value={form.protocol} onChange={(event) => setForm({ ...form, protocol: event.target.value as 'http' | 'https' })}><option>http</option><option>https</option></select></label>
-              <label>HTTP port<input type="number" value={form.httpPort} onChange={(event) => setForm({ ...form, httpPort: Number(event.target.value) })} /></label>
+              <label>IP / host<input readOnly={form.kind === 'generic'} value={form.host} onChange={(event) => setForm({ ...form, host: event.target.value, httpsTrust: undefined, allowInsecureOnvif: false })} /></label>
+              <label>Protocol<select value={form.protocol} onChange={(event) => setForm({ ...form, protocol: event.target.value as 'http' | 'https', httpsTrust: undefined })}><option>http</option><option>https</option></select></label>
+              <label>HTTP port<input type="number" value={form.httpPort} onChange={(event) => setForm({ ...form, httpPort: Number(event.target.value), httpsTrust: undefined })} /></label>
               {form.kind === 'generic' ? (
-                <label className="wide-field">Stream URL<input value={form.streamUrl ?? ''} placeholder="rtsps://10.0.0.1:7441/..." onChange={(event) => setForm({ ...form, streamUrl: event.target.value, host: inferHostFromStreamUrl(event.target.value) || form.host })} /></label>
+                <label className="wide-field">Stream URL
+                  <input type="password" autoComplete="new-password" spellCheck={false} value={form.streamUrl ?? ''}
+                    placeholder={editingId && state.cameras.find((camera) => camera.id === editingId)?.hasStreamUrl ? 'Leave blank to keep saved URL' : 'rtsp:// or rtsps:// address'}
+                    onChange={(event) => setForm({ ...form, streamUrl: event.target.value, rtspsTrust: undefined, host: inferHostFromStreamUrl(event.target.value) || form.host })} />
+                  <small>{editingId && state.cameras.find((camera) => camera.id === editingId)?.hasStreamUrl
+                    ? 'A stream URL is saved. Leave this field blank to keep it, or enter a complete replacement.'
+                    : 'The complete address is stored encrypted for this OS account.'}</small>
+                </label>
               ) : form.kind === 'reolink' ? (
                 <>
                   <label>RTSP port<input type="number" value={form.rtspPort} onChange={(event) => setForm({ ...form, rtspPort: Number(event.target.value) })} /></label>
                   <label>Control channel<input type="number" min="0" value={form.channel} onChange={(event) => setForm({ ...form, channel: Number(event.target.value) })} /></label>
-                  <label>View channel<select value={form.streamChannel} onChange={(event) => setForm({ ...form, streamChannel: Number(event.target.value) })}><option value={0}>0 - Wide/main</option><option value={1}>1 - Zoom/second</option></select></label>
+                  <label>View channel<input type="number" min="0" value={form.streamChannel} onChange={(event) => setForm({ ...form, streamChannel: Number(event.target.value) })} /></label>
+                  <label>Lens controls<select value={form.lensMode ?? 'auto'} onChange={(event) => setForm({ ...form, lensMode: event.target.value as CameraInput['lensMode'] })}><option value="auto">Auto (reported model)</option><option value="single">Single / NVR channel</option><option value="dual">Dual lens (Wide 0 / Zoom 1)</option></select></label>
                 </>
               ) : (
                 <>
@@ -1591,6 +1745,16 @@ export default function App() {
                 </>
               )}
             </div>
+            {form.kind !== 'generic' && form.protocol === 'https' && <CameraTlsSettings key={editingId ?? 'new'} target={form} trust={form.httpsTrust} onChange={(httpsTrust) => setForm((current) => ({ ...current, httpsTrust }))} />}
+            {form.kind === 'generic' && <CameraTlsSettings key={`stream-${editingId ?? 'new'}`} stream={{ url: form.streamUrl ?? '', cameraId: editingId }} trust={form.rtspsTrust} onChange={(rtspsTrust) => setForm((current) => ({ ...current, rtspsTrust }))} />}
+            {form.kind === 'reolink' && <section className="camera-onvif" aria-label="ONVIF fallback">
+              <label className="check-row">
+                <input type="checkbox" checked={form.allowInsecureOnvif === true} onChange={(event) => setForm({ ...form, allowInsecureOnvif: event.target.checked })} />
+                Allow unencrypted ONVIF PTZ fallback
+              </label>
+              <p>Enable only on a trusted local network if Reolink API movement fails. ONVIF sends authentication data and camera commands over HTTP, even when HTTPS is selected above. Certificate errors never trigger this fallback.</p>
+              {form.allowInsecureOnvif === true && <label>ONVIF HTTP port<input type="number" min="1" max="65535" value={form.onvifPort ?? 8000} onChange={(event) => setForm({ ...form, onvifPort: Number(event.target.value) })} /></label>}
+            </section>}
             {form.kind === 'reolink' && (
               <label className="check-row wide-field">
                 <input type="checkbox" checked={form.lowLatency} onChange={(event) => setForm({ ...form, lowLatency: event.target.checked })} />
@@ -1601,9 +1765,9 @@ export default function App() {
               {activeCamera && <button type="button" onClick={() => editCamera(activeCamera)}>Edit active</button>}
               <button type="submit" disabled={busy}>{busy ? 'Saving...' : 'Save camera'}</button>
             </div>
-            {message && <p className="form-message">{message}</p>}
+            {(configurationError || message) && <p className="form-message">{configurationError || message}</p>}
           </form>
-        </div>
+        </Modal>
       )}
     </main>
   );
@@ -1656,23 +1820,11 @@ function updateMessage(status: UpdateStatus): string {
       return `Lastar ned ${status.version ?? 'oppdatering'}... ${Math.round(status.percent ?? 0)}%`;
     case 'downloaded':
       return `Versjon ${status.version} er lasta ned og klar til installasjon.`;
+    case 'installing':
+      return `Klargjer versjon ${status.version} for installasjon. Avsluttar kameratilkoplingane...`;
     case 'error':
       return status.message;
   }
-}
-
-function discoveryDisplayName(camera: CameraDiscoveryResult): string {
-  return camera.name || [camera.manufacturer, camera.model].filter(Boolean).join(' ') || `Camera ${camera.host}`;
-}
-
-function discoveryPorts(camera: CameraDiscoveryResult): string {
-  const parts = [
-    camera.ports.http ? `HTTP ${camera.ports.http}` : '',
-    camera.ports.https ? `HTTPS ${camera.ports.https}` : '',
-    camera.ports.rtsp ? `RTSP ${camera.ports.rtsp}` : '',
-    camera.ports.onvif ? `ONVIF ${camera.ports.onvif}` : '',
-  ].filter(Boolean);
-  return parts.join(' · ');
 }
 
 function cameraSubtitle(camera: CameraConfig, hasSecondaryLens: boolean): string {
@@ -1771,12 +1923,6 @@ function isEditableTarget(target: EventTarget | null): boolean {
   return tag === 'input' || tag === 'textarea' || tag === 'select' || target.isContentEditable;
 }
 
-function supportsSecondaryLens(camera: CameraConfig, profile?: CameraProfile): boolean {
-  if ((camera.streamChannel ?? 0) > 0) return true;
-  if (profile?.device?.model && /trackmix/i.test(profile.device.model)) return true;
-  return /trackmix|dual/i.test(camera.name);
-}
-
 function formatStreamInfo(info?: StreamInfo): string {
   if (!info) return '';
   const parts = [
@@ -1789,3 +1935,11 @@ function formatStreamInfo(info?: StreamInfo): string {
 }
 
 createRoot(document.getElementById('root')!).render(<App />);
+
+function capabilitySummary(profile?: CameraProfile): string {
+  if (!profile) return 'Camera controls are not confirmed. Refresh to retry.';
+  const status = Object.values(profile.capabilities.status ?? {});
+  if (status.some((value) => value === 'denied' || value === 'read-only')) return 'Some controls are unavailable for this camera account (read-only or no permission).';
+  if (status.includes('unknown')) return 'Some camera controls could not be confirmed. Refresh to retry.';
+  return 'Only controls reported by the camera are enabled.';
+}

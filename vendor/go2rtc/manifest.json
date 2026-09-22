@@ -1,0 +1,41 @@
+{
+  "schemaVersion": 1,
+  "version": "1.9.14",
+  "sourceCommit": "b5948cfb25404cc5cb37b166ecaa2dca20b11d4b",
+  "goVersion": "1.25.6",
+  "release": "https://github.com/AlexxIT/go2rtc/releases/tag/v1.9.14",
+  "verifiedOn": "2026-09-20",
+  "verification": "Archive SHA-256 checked against GitHub release asset metadata; each extracted binary SHA-256 and size matched the repository copy.",
+  "binaries": [
+    {
+      "path": "win64/go2rtc.exe",
+      "platform": "win32",
+      "arch": "x64",
+      "bytes": 19737088,
+      "sha256": "923d57252e8139a69c52e4acc1e399a640244a8ef457fd9b7267a25847d68f8c",
+      "archive": "go2rtc_win64.zip",
+      "archiveSha256": "dd4167d75cb04abe618855b7c71f8658bd009f60c1a71835d134d2c11c939907",
+      "url": "https://github.com/AlexxIT/go2rtc/releases/download/v1.9.14/go2rtc_win64.zip"
+    },
+    {
+      "path": "mac-amd64/go2rtc",
+      "platform": "darwin",
+      "arch": "x64",
+      "bytes": 19677216,
+      "sha256": "9beb1d730447729337dbe40218126cb41392aad94b427ec1099837c85fe1a4aa",
+      "archive": "go2rtc_mac_amd64.zip",
+      "archiveSha256": "9b0b9a27a4dc3a5b8b93376e7e8fc2787c6af624a512842622be84aec0171c7a",
+      "url": "https://github.com/AlexxIT/go2rtc/releases/download/v1.9.14/go2rtc_mac_amd64.zip"
+    },
+    {
+      "path": "mac-arm64/go2rtc",
+      "platform": "darwin",
+      "arch": "arm64",
+      "bytes": 18513650,
+      "sha256": "6e5039d56d652d2d325cb3ce3f7cc20248a34db42fe8abf9bb13488494ac023e",
+      "archive": "go2rtc_mac_arm64.zip",
+      "archiveSha256": "919b78adc759d6b3883d1e1b2ac915ac0985bb903ff1897b4d228527bd64690c",
+      "url": "https://github.com/AlexxIT/go2rtc/releases/download/v1.9.14/go2rtc_mac_arm64.zip"
+    }
+  ]
+}

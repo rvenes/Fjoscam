@@ -1,8 +1,16 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
+import { rendererContentSecurityPolicy } from './src/shared/contentSecurityPolicy';
 
-export default defineConfig({
-  plugins: [react()],
+export default defineConfig(({ command }) => ({
+  plugins: [react(), {
+    name: 'fjoscam-renderer-csp',
+    transformIndexHtml: () => [{
+      tag: 'meta',
+      attrs: { 'http-equiv': 'Content-Security-Policy', content: rendererContentSecurityPolicy(command === 'serve') },
+      injectTo: 'head-prepend',
+    }],
+  }],
   base: './',
   server: {
     port: 5173,
@@ -16,6 +24,6 @@ export default defineConfig({
     environment: 'jsdom',
     globals: true,
     setupFiles: './src/test/setup.ts',
-    exclude: ['node_modules/**', 'dist/**', 'dist-renderer/**', 'dist-electron/**'],
+    exclude: ['**/node_modules/**', 'out/**', 'dist/**', 'dist-renderer/**', 'dist-electron/**'],
   },
-});
+}));

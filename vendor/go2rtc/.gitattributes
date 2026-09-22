@@ -1,0 +1,3 @@
+# Preserve upstream notice bytes across Windows/macOS checkouts: modules.json
+# records their SHA-256, including the original line endings.
+notices/*.txt -text

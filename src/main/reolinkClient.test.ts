@@ -23,6 +23,13 @@ describe('buildRtspUrl', () => {
 });
 
 describe('parseZoomFocus', () => {
+  it.each([-1, 1.5, NaN, Infinity, Number.MAX_SAFE_INTEGER + 1])('ignores unsafe motor position %s', (pos) => {
+    expect(parseZoomFocus({ value: { ZoomFocus: { zoom: { pos }, focus: { pos } } } }))
+      .toMatchObject({ zoom: undefined, focus: undefined });
+  });
+  it.each([{ min: NaN, max: 34 }, { min: 0, max: Infinity }, { min: -1, max: 34 }, { min: 0.5, max: 34 }])('rejects unsafe motor ranges %j', (pos) => {
+    expect(parseZoomFocus({ range: { ZoomFocus: { zoom: { pos } } } }).zoomRange).toBeUndefined();
+  });
   it('parses position and range from a TrackMix GetZoomFocus action:1 response', () => {
     // Shape captured from a real Reolink TrackMix WiFi (zoom range 1000-6000).
     const item = {
@@ -59,6 +66,14 @@ describe('parseZoomFocus', () => {
 });
 
 describe('parseIrLights', () => {
+  it('preserves valid choices when the camera mixes malformed elements into its range', () => {
+    const raw: unknown = { value: { IrLights: { state: 'Auto' } }, range: { IrLights: { state: [null, {}, true, 1, 'Off', 'Auto', 'Off'] } } };
+    expect(parseIrLights(raw as Parameters<typeof parseIrLights>[0])).toEqual({ mode: 'auto', options: ['off', 'auto'] });
+  });
+  it('does not invent status from an entirely malformed range/value', () => {
+    const raw: unknown = { value: { IrLights: { state: {} } }, range: { IrLights: { state: [null, {}, true] } } };
+    expect(parseIrLights(raw as Parameters<typeof parseIrLights>[0])).toBeUndefined();
+  });
   it('reads the mode from state and the supported options from the range block', () => {
     // Shape captured from a real Reolink TrackMix WiFi: no "On" option.
     const item = {
@@ -79,6 +94,22 @@ describe('parseIrLights', () => {
 });
 
 describe('normalizeWhiteLed', () => {
+  it.each([null, {}, [], true, -1, 101, NaN, Infinity, '50'])('does not expose invalid brightness %j', (bright) => {
+    const raw: unknown = { bright, mode: 3 };
+    expect(normalizeWhiteLed(raw as Parameters<typeof normalizeWhiteLed>[0]))
+      .toMatchObject({ brightness: undefined, supportsBrightness: false, mode: 3, enabled: true });
+  });
+  it.each(['', ' ', '-1', -1, 1.5, NaN, Infinity, {}, null])('uses state when mode is malformed: %j', (mode) => {
+    const raw: unknown = { mode, state: 1 };
+    expect(normalizeWhiteLed(raw as Parameters<typeof normalizeWhiteLed>[0]))
+      .toMatchObject({ enabled: true, mode: undefined, supportsModes: false });
+  });
+  it('keeps numeric mode strings and uses the next valid brightness alias', () => {
+    expect(normalizeWhiteLed({ mode: '3', bright: NaN, brightness: 50, Bright: 60 }))
+      .toMatchObject({ mode: 3, enabled: true, brightness: 50, supportsBrightness: true, supportsModes: true });
+    expect(normalizeWhiteLed({ mode: '0', Bright: 0 }))
+      .toMatchObject({ enabled: false, brightness: 0, supportsBrightness: true });
+  });
   it('treats mode as the source of truth, not the read-only state field', () => {
     // Captured from TrackMix: schedule mode active although state says 0.
     const value = { bright: 0, channel: 0, mode: 3, state: 0 };

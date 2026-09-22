@@ -1,137 +1,28 @@
-# Fjoscam Agent Notes
+# Fjoscam Project Instructions
 
-Fjoscam is an Electron + React + TypeScript desktop app for LAN camera viewing, built first for Windows. It started as a simpler Reolink-style viewer for barn/lambing monitoring: large live video, fast PTZ controls, presets, keyboard navigation, fullscreen viewing, and local-only camera access.
+## Role and supported platforms
 
-## Working Style
+Fjoscam is an Electron + React + TypeScript desktop app for local camera monitoring on Windows and macOS. Preserve the LAN-first design and keep Windows and both supported macOS architectures working.
 
-- Keep changes small, practical, and safe. Prefer fixing one concrete issue at a time.
-- Check `git status --short` before editing or committing.
-- Do not revert user changes unless explicitly asked.
-- Use existing project patterns instead of large rewrites.
-- Keep replies short. Do not paste huge diffs or noisy terminal output.
-- When the user asks to publish/share finished work, commit and push to GitHub.
-- Main remote is `https://github.com/rvenes/Fjoscam.git`.
+## Camera and UX invariants
 
-## Current Camera Support
+- Reolink uses the local HTTP API/CGI for capabilities and controls, and bundled go2rtc for RTSP-to-local playback. Keep camera-specific commands in adapters and gate controls by reported capability.
+- Panasonic legacy cameras use proxied MJPEG plus their CGI PTZ interface, including the nonstandard multipart-parser compatibility. They have no audio.
+- Generic RTSP/RTSPS streams use go2rtc for video/audio and have no Fjoscam PTZ, presets, or light controls. Preserve the UniFi `enableSrtp` normalization.
+- Prefer Reolink High/Clear by default. Never silently downgrade High/H265 to Low/Fluent; Low is an explicit per-camera setting.
+- Preserve fullscreen, camera switching, PTZ, preset, speed, optical-zoom, and mute keyboard controls. Loud camera actions and destructive camera/preset changes require deliberate confirmation.
 
-- Reolink LAN cameras:
-  - HTTP API/CGI for login, PTZ, presets, device/profile info, IR/white LED, siren.
-  - RTSP via bundled `go2rtc` to WebRTC for low-latency viewing.
-  - High/Clear is preferred by default. Low/Fluent is a manual per-camera choice and is stored.
-- Panasonic legacy MJPEG:
-  - Uses proxied MJPEG from `/nphMotionJpeg?...`.
-  - Uses HTTP CGI `/nphControlCamera` for pan/tilt/zoom/focus/presets.
-  - Uses `insecureHTTPParser` and JPEG-frame extraction because the old camera sends nonstandard multipart HTTP.
-- Generic RTSP/RTSPS:
-  - Intended for UniFi Protect shared RTSP/RTSPS links.
-  - `enableSrtp` is stripped before passing the URL to go2rtc.
-  - Video works through WebRTC/go2rtc; no PTZ/presets/lights for generic streams.
+## Local camera data and logging
 
-## Important UX Decisions
+- Camera configuration is local user data. Saved password fields are encrypted with Electron `safeStorage`, decrypted only in the main process, and never returned in normal renderer state.
+- Do not claim that all camera data is encrypted: hosts, usernames, and stream configuration are currently ordinary local configuration, and generic stream URLs may themselves contain credentials. Credential-bearing generic URLs remain an open hardening gap; do not introduce or expose credentials in plain configuration.
+- Preserve atomic camera-config writes, validated backup/recovery, and serialized updates.
+- Never log passwords, tokens, credential-bearing stream URLs, or other sensitive camera data. Extend sanitization whenever a new error or logging path can carry such values.
 
-- High/Clear should be first priority on capable machines.
-- Do not automatically downgrade Reolink High/H265 to Low. Let the user choose Low manually.
-- Keyboard controls matter:
-  - Enter / Numpad Enter toggles fullscreen.
-  - Page Up / Page Down changes camera.
-  - Numpad, arrow keys, and WASD steer PTZ.
-  - Number keys recall presets.
-  - Numpad `+` / `-` changes PTZ speed.
-- Panasonic works without audio. Reolink/UniFi audio has been explored, but robust app-level volume/mute is not finished.
+## Build and release invariants
 
-## Build And Test
-
-Run these when relevant:
-
-```powershell
-npm test
-npm run build
-npm run dist
-```
-
-For a quick runnable unpacked Windows build:
-
-```powershell
-npm run package
-```
-
-Runnable app path:
-
-```text
-<repo-root>\dist\win-unpacked\Fjoscam.exe
-```
-
-If build/package fails with `EPERM` on `dist\win-unpacked`, Fjoscam or `go2rtc` is probably still running from that folder. Check and stop only those processes:
-
-```powershell
-Get-Process | Where-Object { $_.ProcessName -in @('Fjoscam','go2rtc') -and $_.Path -like '*\dist\win-unpacked\*' }
-```
-
-## Release / Auto Update
-
-Auto-update uses `electron-updater` with Electron Builder generic provider:
-
-```text
-https://venes.org/fjoscam/
-```
-
-To make a release that triggers updates:
-
-1. Bump `version` in `package.json` and `package-lock.json` using:
-
-   ```powershell
-   npm version X.Y.Z --no-git-tag-version
-   ```
-
-2. Run:
-
-   ```powershell
-   npm test
-   npm run build
-   npm run dist
-   ```
-
-3. Upload these files from `dist\` to `https://venes.org/fjoscam/`:
-
-   ```text
-   latest.yml
-   Fjoscam Setup X.Y.Z.exe
-   Fjoscam Setup X.Y.Z.exe.blockmap
-   ```
-
-`latest.yml` must sit directly at:
-
-```text
-https://venes.org/fjoscam/latest.yml
-```
-
-## Packaging Notes
-
-- `npm run package` creates/updates `dist\win-unpacked`, useful for local testing.
-- `npm run dist` creates installer/update files in `dist\`.
-- Do not delete older stable folders unless asked.
-- Keep Windows working when adding macOS support later. macOS auto-update/signing is separate work and must not break Windows NSIS updates.
-
-## Logs
-
-Useful local logs are under:
-
-```text
-%APPDATA%\fjoscam\
-```
-
-Common logs:
-
-```text
-go2rtc-bridge.log
-snapshot-server.log
-renderer.log
-```
-
-Camera config is local user data, not included in installer builds:
-
-```text
-%APPDATA%\fjoscam\cameras.json
-```
-
-Secrets are encrypted with Electron `safeStorage`.
+- Use the active commands and platform procedures in `README.md` and `RELEASING.md`. Relevant changes must pass tests and TypeScript/build checks; packaging and updater changes require packaged-app checks on the affected platform.
+- On Windows, EPERM/EBUSY recovery may stop only Fjoscam or go2rtc processes that are actually running from the current unpacked build directory.
+- Keep package and lockfile versions, app ID, artifact names, architectures, update metadata, file sizes, and feed hashes consistent. Never hand-edit generated update hashes.
+- macOS packages must pass the repository's post-signature verification. Notarization is an open gap: do not describe or ship a build as notarized unless notarization, stapling, and Gatekeeper checks have actually passed.
+- Git commits, pushes, pull requests, GitHub Releases, local staging, and public web publishing are separate operations and require matching explicit scope. Fjoscam stages approved public files only under `H:\Koding\Venes.org\fjoscam`; the active global Mac/Syncthing and venes.org instructions own transport and public publishing.

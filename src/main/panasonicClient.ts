@@ -2,13 +2,13 @@ import { request as httpRequest } from 'node:http';
 import { request as httpsRequest } from 'node:https';
 import type { IncomingMessage } from 'node:http';
 import type { CameraWithSecret, Preset, PtzCommand, PtzDirection } from '../shared/types.js';
+import { cameraPathUrl } from '../shared/validation.js';
+import { cameraTlsError, pinnedAgent } from './cameraTls.js';
+import { panasonicPresets } from '../shared/cameraDefaults.js';
 
 export class PanasonicClient {
   getPresets(): Preset[] {
-    return Array.from({ length: 10 }, (_item, index) => ({
-      id: index + 1,
-      name: `Preset ${index + 1}`,
-    }));
+    return panasonicPresets();
   }
 
   async sendPtz(camera: CameraWithSecret, command: PtzCommand): Promise<void> {
@@ -28,12 +28,12 @@ export class PanasonicClient {
 
   streamUrl(camera: CameraWithSecret): URL {
     const path = camera.mjpegPath || '/nphMotionJpeg?Resolution=640x480&Quality=Standard';
-    return new URL(path, `${camera.protocol}://${camera.host}:${camera.httpPort}`);
+    return cameraPathUrl(camera, path);
   }
 
   private controlUrl(camera: CameraWithSecret): URL {
     const path = camera.ptzPath || '/nphControlCamera';
-    const url = new URL(path, `${camera.protocol}://${camera.host}:${camera.httpPort}`);
+    const url = cameraPathUrl(camera, path);
     url.searchParams.set('Resolution', '640x480');
     url.searchParams.set('Quality', 'Standard');
     url.searchParams.set('RPeriod', '0');
@@ -44,9 +44,9 @@ export class PanasonicClient {
   }
 }
 
-export function openPanasonicStream(camera: CameraWithSecret): Promise<IncomingMessage> {
+export function openPanasonicStream(camera: CameraWithSecret, signal?: AbortSignal): Promise<IncomingMessage> {
   const client = new PanasonicClient();
-  return requestPanasonicStream(client.streamUrl(camera), camera);
+  return requestPanasonicStream(client.streamUrl(camera), camera, signal);
 }
 
 async function requestPanasonic(url: URL, camera: CameraWithSecret): Promise<void> {
@@ -58,9 +58,11 @@ async function requestPanasonic(url: URL, camera: CameraWithSecret): Promise<voi
   });
 }
 
-function requestPanasonicStream(url: URL, camera: CameraWithSecret): Promise<IncomingMessage> {
+function requestPanasonicStream(url: URL, camera: CameraWithSecret, signal?: AbortSignal): Promise<IncomingMessage> {
+  if (signal?.aborted) return Promise.reject(new Error('Camera stream was cancelled.'));
   const transport = url.protocol === 'https:' ? httpsRequest : httpRequest;
   const auth = Buffer.from(`${camera.username}:${camera.password}`, 'utf8').toString('base64');
+  const ownedAgent = pinnedAgent(url, camera.httpsTrust);
   return new Promise((resolve, reject) => {
     const request = transport(
       url,
@@ -68,18 +70,26 @@ function requestPanasonicStream(url: URL, camera: CameraWithSecret): Promise<Inc
         method: 'GET',
         headers: { authorization: `Basic ${auth}` },
         insecureHTTPParser: true,
-        rejectUnauthorized: false,
+        rejectUnauthorized: true,
+        agent: ownedAgent,
+        signal,
       },
       (response) => {
-        if ((response.statusCode ?? 500) >= 400) {
-          response.resume();
+        clearTimeout(deadline);
+        if ((response.statusCode ?? 500) < 200 || (response.statusCode ?? 500) >= 300) {
+          response.destroy();
           reject(new Error(`Panasonic HTTP ${response.statusCode}`));
           return;
         }
         resolve(response);
       },
     );
-    request.on('error', reject);
+    const deadline = setTimeout(() => {
+      request.destroy(new Error('Panasonic connection timed out.'));
+      ownedAgent?.destroy();
+    }, 7000);
+    request.on('close', () => { clearTimeout(deadline); ownedAgent?.destroy(); });
+    request.on('error', (error) => reject(signal?.aborted ? new Error('Camera stream was cancelled.') : cameraTlsError(error)));
     request.setTimeout(7000, () => request.destroy(new Error('Panasonic request timed out.')));
     request.end();
   });

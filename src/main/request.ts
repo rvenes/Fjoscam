@@ -2,12 +2,14 @@ import { Agent as HttpAgent, request as httpRequest } from 'node:http';
 import { Agent as HttpsAgent } from 'node:https';
 import { request as httpsRequest } from 'node:https';
 import type { RequestOptions } from 'node:https';
+import type { HttpsTrust } from '../shared/types.js';
+import { cameraTlsError, pinnedAgent } from './cameraTls.js';
+import { CameraHttpError } from './cameraErrors.js';
 
 const httpAgent = new HttpAgent({ keepAlive: true, maxSockets: 16 });
-const httpsAgent = new HttpsAgent({ keepAlive: true, maxSockets: 16, rejectUnauthorized: false });
-const redirectOrigins = new Map<string, string>();
+const httpsAgent = new HttpsAgent({ keepAlive: true, maxSockets: 16 });
 
-export async function requestJson<T>(url: URL, body: unknown, redirects = 2): Promise<T> {
+export async function requestJson<T>(url: URL, body: unknown, redirects = 2, httpsTrust?: HttpsTrust): Promise<T> {
   const bytes = await requestBuffer(
     url,
     {
@@ -15,14 +17,15 @@ export async function requestJson<T>(url: URL, body: unknown, redirects = 2): Pr
       headers: { 'content-type': 'application/json' },
       body: Buffer.from(JSON.stringify(body)),
       timeoutMs: 6000,
+      httpsTrust,
     },
     redirects,
   );
   const text = bytes.toString('utf8');
   try {
     return JSON.parse(text) as T;
-  } catch (error) {
-    throw new Error(`Camera returned non-JSON response: ${text.slice(0, 80)}`, { cause: error });
+  } catch {
+    throw new Error('Camera returned a non-JSON response.');
   }
 }
 
@@ -40,8 +43,8 @@ export async function requestText(url: URL, body: string, contentType = 'applica
   return bytes.toString('utf8');
 }
 
-export async function requestBinary(url: URL, redirects = 2): Promise<{ bytes: Buffer; contentType: string }> {
-  return requestBuffer(url, { method: 'GET', timeoutMs: 6000 }, redirects, true);
+export async function requestBinary(url: URL, redirects = 2, httpsTrust?: HttpsTrust, signal?: AbortSignal): Promise<{ bytes: Buffer; contentType: string }> {
+  return requestBuffer(url, { method: 'GET', timeoutMs: 6000, httpsTrust, signal }, redirects, true);
 }
 
 type LocalRequestOptions = {
@@ -49,6 +52,9 @@ type LocalRequestOptions = {
   headers?: Record<string, string>;
   body?: Buffer;
   timeoutMs: number;
+  deadline?: number;
+  httpsTrust?: HttpsTrust;
+  signal?: AbortSignal;
 };
 
 async function requestBuffer(
@@ -69,65 +75,98 @@ async function requestBuffer(
   redirects: number,
   includeContentType = false,
 ): Promise<Buffer | { bytes: Buffer; contentType: string }> {
-  const cachedRedirect = redirectOrigins.get(originKey(url));
-  if (cachedRedirect) {
-    const redirected = new URL(cachedRedirect);
-    redirected.pathname = url.pathname;
-    redirected.search = url.search;
-    url = redirected;
-  }
+  if (!['http:', 'https:'].includes(url.protocol)) throw new Error('Unsupported camera protocol.');
+  if (options.signal?.aborted) throw new Error('Camera request was cancelled.');
+  const deadline = options.deadline ?? Date.now() + options.timeoutMs;
+  const remaining = deadline - Date.now();
+  if (remaining <= 0) throw new Error('Camera request timed out.');
 
   const transport = url.protocol === 'https:' ? httpsRequest : httpRequest;
+  const ownedAgent = pinnedAgent(url, options.httpsTrust);
   const requestOptions: RequestOptions = {
     method: options.method,
-    agent: url.protocol === 'https:' ? httpsAgent : httpAgent,
+    agent: ownedAgent ?? (url.protocol === 'https:' ? httpsAgent : httpAgent),
     headers: {
       ...options.headers,
       ...(options.body ? { 'content-length': String(options.body.length) } : {}),
     },
-    rejectUnauthorized: false,
+    rejectUnauthorized: true,
+    signal: options.signal,
   };
 
   return new Promise((resolve, reject) => {
+    let settled = false;
+    const finish = (error?: Error, value?: Buffer | { bytes: Buffer; contentType: string }) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      if (error) reject(error);
+      else resolve(value!);
+    };
     const request = transport(url, requestOptions, (response) => {
+      let redirecting = false;
+      response.on('error', () => { if (!redirecting) finish(new Error('Camera response failed.')); });
+      response.on('aborted', () => { if (!redirecting) finish(new Error('Camera response was interrupted.')); });
       const location = response.headers.location;
-      if ([301, 302, 307, 308].includes(response.statusCode ?? 0) && location && redirects > 0) {
-        response.resume();
-        const nextUrl = new URL(location, url);
-        if (nextUrl.pathname === '/' && !nextUrl.search && url.pathname !== '/') {
-          nextUrl.pathname = url.pathname;
-          nextUrl.search = url.search;
+      if ([301, 302, 303, 307, 308].includes(response.statusCode ?? 0)) {
+        try {
+          if (!location || redirects <= 0) throw new Error('Camera redirect limit reached.');
+          const nextUrl = new URL(location, url);
+          if (!['http:', 'https:'].includes(nextUrl.protocol) || nextUrl.hostname !== url.hostname ||
+              (url.protocol === 'https:' && nextUrl.origin !== url.origin) || nextUrl.username || nextUrl.password) {
+            throw new Error('Camera redirect to another HTTPS origin, host or insecure protocol was blocked.');
+          }
+          if (nextUrl.pathname === '/' && !nextUrl.search && url.pathname !== '/') {
+            nextUrl.pathname = url.pathname;
+            nextUrl.search = url.search;
+          }
+          // Do not consume an unlimited redirect body or cache a new trust origin.
+          redirecting = true;
+          response.destroy();
+          clearTimeout(timer);
+          void requestBuffer(nextUrl, { ...options, deadline }, redirects - 1, includeContentType as true)
+            .then((value) => finish(undefined, value), (error: Error) => finish(error));
+        } catch (error) {
+          finish(error as Error);
+          response.destroy();
         }
-        if (originKey(nextUrl) !== originKey(url)) {
-          redirectOrigins.set(originKey(url), `${nextUrl.protocol}//${nextUrl.host}`);
-        }
-        void requestBuffer(nextUrl, options, redirects - 1, includeContentType as true).then(resolve).catch(reject);
         return;
       }
 
       const chunks: Buffer[] = [];
-      response.on('data', (chunk: Buffer) => chunks.push(chunk));
+      let size = 0;
+      const maxBytes = includeContentType ? 16 * 1024 * 1024 : 4 * 1024 * 1024;
+      response.on('data', (chunk: Buffer) => {
+        size += chunk.length;
+        if (size > maxBytes) {
+          finish(new Error('Camera response exceeded the size limit.'));
+          response.destroy();
+          return;
+        }
+        chunks.push(chunk);
+      });
       response.on('end', () => {
         const bytes = Buffer.concat(chunks);
-        if ((response.statusCode ?? 500) >= 400) {
-          reject(new Error(`Camera HTTP ${response.statusCode}: ${bytes.toString('utf8').slice(0, 160)}`));
+        if ((response.statusCode ?? 500) < 200 || (response.statusCode ?? 500) >= 300) {
+          finish(new CameraHttpError(response.statusCode ?? 500));
           return;
         }
         if (includeContentType) {
-          resolve({ bytes, contentType: response.headers['content-type'] ?? 'application/octet-stream' });
+          finish(undefined, { bytes, contentType: response.headers['content-type'] ?? 'application/octet-stream' });
         } else {
-          resolve(bytes);
+          finish(undefined, bytes);
         }
       });
     });
 
-    request.on('error', reject);
-    request.setTimeout(options.timeoutMs, () => request.destroy(new Error('Camera request timed out.')));
+    const timer = setTimeout(() => {
+      finish(new Error('Camera request timed out.'));
+      request.destroy();
+      ownedAgent?.destroy();
+    }, remaining);
+    request.on('close', () => ownedAgent?.destroy());
+    request.on('error', (error) => finish(options.signal?.aborted ? new Error('Camera request was cancelled.') : cameraTlsError(error)));
     if (options.body) request.write(options.body);
     request.end();
   });
-}
-
-function originKey(url: URL): string {
-  return `${url.protocol}//${url.host}`;
 }

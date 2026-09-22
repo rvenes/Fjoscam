@@ -42,6 +42,20 @@ button:disabled {
   background: #151717;
 }
 
+.configuration-notice {
+  display: grid;
+  flex-shrink: 0;
+  gap: 6px;
+  margin: 8px 0;
+  padding: 10px;
+  border: 1px solid #987339;
+  border-radius: 8px;
+  background: #342b1b;
+  color: #ffe0a6;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
 .shell.viewer-fullscreen {
   grid-template-columns: minmax(0, 1fr);
   background: #000;
@@ -124,7 +138,7 @@ button:disabled {
   font-weight: 750;
 }
 
-.section-title, .panel-heading, .topbar, .modal-heading, .modal-actions {
+.section-title, .topbar, .modal-heading, .modal-actions {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -210,7 +224,7 @@ button:disabled {
   font-weight: 720;
 }
 
-.camera-host, .empty, .panel-heading small, .topbar p, .hint, .stream-placeholder small {
+.camera-host, .empty, .topbar p, .hint, .stream-placeholder small {
   color: #a8b1b0;
 }
 
@@ -317,11 +331,6 @@ button:disabled {
 .danger-control {
   color: #ffd6d6;
   background: #4a3030;
-}
-
-.panel-heading span {
-  font-weight: 750;
-  font-size: 18px;
 }
 
 .ptz-grid {
@@ -456,10 +465,6 @@ button:disabled {
   background: #3a3f3f;
 }
 
-.top-actions button.selected-action {
-  background: #5a6650;
-}
-
 .audio-control {
   display: inline-flex;
   align-items: center;
@@ -502,14 +507,6 @@ button:disabled {
 
 .quality-switch button.selected {
   background: #5a6650;
-}
-
-.zoom-switch {
-  grid-template-columns: repeat(4, 1fr);
-}
-
-.zoom-switch button.selected {
-  background: #4f5f67;
 }
 
 .video-stage {
@@ -630,7 +627,6 @@ button:disabled {
   flex: 0 0 auto;
   overflow: hidden;
   border-radius: 6px;
-  flex: 0 0 auto;
   background: #4a5459;
 }
 
@@ -670,11 +666,11 @@ button:disabled {
   color: #aeb8b7;
 }
 
-.status.ok {
+.status.ok, .stream-detail.ok, .camera-test-result.ok {
   color: #69d193;
 }
 
-.status.bad, .danger, .form-message {
+.status.bad, .stream-detail.bad, .camera-test-result.bad, .danger, .form-message {
   color: #ff8585;
 }
 
@@ -741,6 +737,18 @@ button:disabled {
   background: rgba(0, 0, 0, 0.62);
   overflow: hidden;
 }
+
+.camera-tls, .camera-onvif {
+  margin-top: 16px;
+  padding: 12px;
+  border: 1px solid #586361;
+  border-radius: 8px;
+}
+
+.camera-tls p, .camera-onvif p { margin: 8px 0; }
+.camera-tls code { overflow-wrap: anywhere; font-size: 0.85em; }
+.camera-tls button { margin: 4px 8px 8px 0; }
+.camera-tls small { display: block; }
 
 .settings-modal {
   width: min(760px, 100%);
@@ -859,6 +867,16 @@ button:disabled {
   overflow: auto;
   scrollbar-width: none;
 }
+
+.discovery-diagnostics {
+  color: #a8b1b0;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.discovery-diagnostics summary { cursor: pointer; }
+.discovery-diagnostics ul { padding-left: 20px; }
+.discovery-diagnostics li + li { margin-top: 6px; }
 
 .discovery-list::-webkit-scrollbar {
   display: none;

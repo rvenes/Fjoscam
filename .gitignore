@@ -32,6 +32,7 @@ go2rtc.yaml
 # TypeScript/Vite caches
 *.tsbuildinfo
 .turbo/
+__pycache__/
 
 # OS/editor noise
 .DS_Store

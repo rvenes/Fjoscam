@@ -1,272 +1,137 @@
 # Reolink LAN API Notes
 
-These notes collect candidate Reolink LAN HTTP API / CGI commands for future Fjoscam work. They are implementation guidance, not confirmed support for every camera model.
+These notes distinguish the Reolink LAN commands Fjoscam currently implements from candidate work. A command being implemented does not mean every camera model or firmware supports it. Runtime capability data and real-camera behaviour remain authoritative.
 
-Fjoscam should keep all camera-specific calls inside the Reolink adapter layer. Renderer/UI code must use normalized TypeScript methods and capability flags, not raw Reolink command names.
+Keep camera-specific calls inside the Reolink adapter layer. Renderer/UI code must use normalized TypeScript methods and capability flags, not raw Reolink command names.
 
 ## Boundaries
 
-- LAN-only camera control.
-- Reolink HTTP API / CGI is the primary control API.
-- ONVIF can remain a compatibility fallback when a Reolink command is missing or behaves differently.
-- Unsupported features must be hidden or disabled per camera.
-- Model-specific quirks belong in the adapter layer.
-- Prefer safe read commands before write commands.
+- LAN-only camera control; Reolink UID/P2P is not supported.
+- Reolink HTTP API/CGI is the primary control API.
+- ONVIF is an implemented PTZ fallback when compatible Reolink PTZ calls fail.
+- Unsupported controls must be hidden or disabled per camera.
+- Model- and firmware-specific quirks belong in the adapter layer.
+- Prefer capability and state reads before camera writes.
+- Loud actions and destructive preset changes require deliberate UI confirmation.
 
-## Session Startup
+## Implemented today
 
-For each camera session, prefer this read-first sequence:
+### Session and device profile
 
-1. `Login`
-2. `GetAbility`
-3. `GetDevInfo`
-4. `GetChannelStatus`
+Fjoscam implements:
 
-Build a `CameraCapabilities` object from these responses. Token expiry should trigger automatic re-login. Unsupported command errors should be logged clearly without crashing the app.
+- `Login` and `Logout`, with cached sessions and automatic re-login after login/session errors.
+- `GetAbility` for normalized capability flags.
+- `GetDevInfo` for name, model, UID/serial, firmware, and hardware information.
+- `GetChannelStatus` for channel names and online state.
+- `GetEnc` as a read-only source of High/Clear and Low/Fluent stream information.
 
-## Core Commands
+A connection test logs in, reads presets, name, stream information, and the capability/device/channel profile. Individual optional reads are allowed to fail without crashing the app.
 
-- `Login`
-- `Logout`
-- `GetAbility`
-- `GetDevInfo`
-- `GetChannelStatus`
+The result now describes camera API connectivity, separately from video. Presets are optional and capability-gated. Playback status observes actual frames in the local player; page load is not evidence of live video. Reconnect retries the configured stream without changing quality. See [the playback progress log](utbetring-avspelingsstatus-framdrift.md) for tests and limitations.
 
-## PTZ
+### PTZ, zoom, and focus
 
-Primary command:
+`PtzCtrl` implements movement, stop, relative zoom/focus, and preset recall through normalized `PtzCommand` values. Compatible failures fall back to the ONVIF PTZ adapter.
 
-- `PtzCtrl`
+`GetZoomFocus` reads the current zoom/focus state and camera-reported range. Fjoscam tries the range-returning action first and falls back to the older action shape. `StartZoomFocus` sets an absolute zoom position, clamped to the reported range; a legacy default range is used only when the camera does not report one.
 
-Normalized adapter methods:
+### Presets
 
-- `ptzMove(direction, speed)`
-- `ptzStop()`
-- `ptzZoomIn(speed)`
-- `ptzZoomOut(speed)`
-- `ptzFocusNear(speed)`
-- `ptzFocusFar(speed)`
+- `GetPtzPreset` lists enabled presets by their real camera IDs.
+- `SetPtzPreset` saves or disables/deletes presets.
+- Number keys recall preset IDs rather than list positions.
 
-Likely command names to map:
+The current UI can save and delete Reolink presets. Deletion requires confirmation; do not remove that safeguard.
 
-- Movement: model-dependent `PtzCtrl` operations.
-- Zoom fallback: `ZoomInc`, `ZoomDec`
-- Focus fallback: `FocusInc`, `FocusDec`
+### IR, spotlight, and siren
 
-## Zoom And Focus
+- `GetIrLights` and `SetIrLights` read and set supported IR modes. The adapter uses the camera's `state` field because tested TrackMix firmware ignores `mode` writes.
+- `GetWhiteLed` and `SetWhiteLed` handle reported spotlight mode/state and optional brightness. Cameras can require an administrator account for writes.
+- `GetAudioAlarm` reads siren configuration.
+- `AudioAlarmPlay` starts the siren and is exposed only behind a confirmation.
 
-Read/write commands to verify:
+`SetAudioAlarm` configuration writes and a separate stop-siren command are not implemented.
 
-- `GetZoomFocus`
-- `StartZoomFocus`
+### Snapshot and streaming
 
-Use these for absolute optical zoom/focus where supported. Use `PtzCtrl` zoom/focus increment commands as fallback.
+- `Snap` supplies the snapshot/MJPEG compatibility path.
+- RTSP is converted to local playback by the bundled go2rtc runtime.
+- Stream selection is separate from encoding configuration: choosing High or Low does not call `SetEnc`.
 
-## Presets
+## Capability handling
 
-Commands:
+`GetAbility` is normalized into capability flags for PTZ, presets, zoom/focus, IR, white LED, siren, motion, and AI. A capability flag indicates that UI may be offered; it does not prove that every related candidate command below is implemented or works on every firmware.
 
-- `GetPtzPreset`
-- `SetPtzPreset`
+The parser now selects the configured control channel from `abilityChn`, accepts flat legacy responses, and separates support from operation/write/read permission. Unknown, unsupported, denied and read-only states disable the relevant controls. Mouse and keyboard actions share the same policy; Stop remains available. Camera-side zoom is separate from pan/tilt and focus. See [the R12 implementation log](utbetring-capabilities-framdrift.md) for sources, compatibility limits and tests.
 
-Normalized methods:
+Lens controls use the reported TrackMix model in Auto mode. Camera names and nonzero NVR stream channels no longer imply a second lens. Settings provide explicit Single / NVR and Dual lens overrides; Dual means Wide channel 0 and Zoom channel 1. The view channel itself accepts other nonnegative channel numbers.
 
-- `getPresets()`
-- `gotoPreset(id)`
-- `savePreset(id, name)`
-- `deletePreset(id)` only if the model reports support
+Model-specific parsing and fallback behaviour should be covered by adapter tests using redacted or synthetic response shapes. Unsupported-command errors should be clear but must not expose login tokens or credentials.
 
-Preset edit/delete should stay out of the main viewer to avoid accidental changes.
+## Candidate work not currently implemented
 
-## Guard, Check State, Patrol
-
-Candidate commands to verify per model:
+### Guard, check state, and patrol
 
 - `GetPtzGuard`
 - `SetPtzGuard`
 - `GetPtzCheckState`
 - `PtzCheck`
 
-Treat as optional until tested on real cameras.
+Treat these as optional until implemented and tested on real cameras.
 
-## IR Lights
-
-Commands:
-
-- `GetIrLights`
-- `SetIrLights`
-
-Normalized methods:
-
-- `getIrLights()`
-- `setIrLights(mode)`
-
-Expose only when capabilities confirm support.
-
-## White LED / Spotlight
-
-Commands:
-
-- `GetWhiteLed`
-- `SetWhiteLed`
-
-Normalized methods:
-
-- `getWhiteLed()`
-- `setWhiteLed(enabled)`
-- `setWhiteLedBrightness(value)` if supported
-- `setWhiteLedMode(mode)` if supported
-
-## Siren / Audio Alarm
-
-Commands:
-
-- `GetAudioAlarm`
-- `SetAudioAlarm`
-- `AudioAlarmPlay`
-
-Normalized methods:
-
-- `getSirenConfig()`
-- `setSirenConfig(config)`
-- `playSiren()`
-- `stopSiren()` if supported
-
-Use extra UI confirmation for loud actions.
-
-## Motion Detection
-
-Commands:
+### Motion detection
 
 - `GetMdState`
 - `GetMdAlarm`
 - `SetMdAlarm`
 
-Normalized methods:
+Motion capability detection exists, but these state/configuration calls are not implemented.
 
-- `getMotionState()`
-- `getMotionAlarmConfig()`
-- `setMotionAlarmConfig(config)`
-
-## AI Detection
-
-Commands:
+### AI detection
 
 - `GetAiState`
 - `GetAiCfg`
 - `SetAiCfg`
 
-Normalized methods:
+AI capability detection exists, but these state/configuration calls are not implemented.
 
-- `getAiState()`
-- `getAiConfig()`
-- `setAiConfig(config)`
-
-## Image Settings
-
-Commands:
+### Image settings
 
 - `GetImage`
 - `SetImage`
 
-Candidate settings:
+Candidate settings include brightness, contrast, saturation, sharpness, hue, flip/mirror, day/night mode, anti-flicker, and model-specific WDR/HDR. Writes require a deliberate settings surface.
 
-- Brightness
-- Contrast
-- Saturation
-- Sharpness
-- Hue
-- Flip
-- Mirror
-- Day/night mode
-- Anti-flicker
-- WDR/HDR if supported
+### Encoding writes
 
-## Stream / Encoding Settings
+`GetEnc` is implemented for display and stream information. `SetEnc` is not implemented. Changing codec, resolution, FPS, bitrate, or camera audio writes persistent camera configuration and must remain separate from selecting the live High/Low stream.
 
-Commands:
-
-- `GetEnc`
-- `SetEnc`
-
-Candidate settings:
-
-- Main/sub stream
-- Resolution
-- FPS
-- Bitrate
-- Codec
-- Audio if supported
-
-Keep this separate from live stream selection. Changing encoding writes camera configuration and should require a deliberate settings panel.
-
-## Snapshot
-
-Commands:
-
-- `Snap`
-
-Normalized method:
-
-- `getSnapshot()`
-
-Fjoscam already has snapshot/MJPEG fallback plumbing; use this for compatibility and diagnostics.
-
-## Recording / Playback
-
-Commands to verify later:
+### Recording and playback
 
 - `GetRec`
 - `SetRec`
 - `Search`
 - `Download`
 
-Normalized methods:
+Recording search, playback, and downloads are outside the current live-view scope.
 
-- `getRecordingConfig()`
-- `setRecordingConfig(config)`
-- `searchRecordings(from, to)`
-- `downloadRecording(file)`
+### Other later candidates
 
-Recording/playback is outside the current live-view MVP and should stay lower priority.
+- Two-way audio.
+- Doorbell and chime features.
+- Dual-lens/TrackMix-specific controls beyond current channel selection.
+- Auto tracking and patrol routes.
+- Quick replies and visitor events.
 
-## Optional Later
+## Suggested implementation order
 
-- Two-way audio
-- Doorbell-specific features
-- Dual-lens / TrackMix-specific features
-- Auto tracking
-- Patrol routes
-- Chime / visitor event
-- Quick replies
-
-## Suggested UI Panels
-
-- PTZ panel
-- Preset panel
-- Zoom/focus panel
-- IR light panel
-- Spotlight panel
-- Siren/alarm panel
-- Motion panel
-- AI detection panel
-- Image settings panel
-- Encoding panel
-- Snapshot panel
-- Recording/playback panel
-- Device info panel
-
-## Suggested Priority
-
-1. `GetAbility`, `GetDevInfo`, `GetChannelStatus`
-2. IR lights
-3. White LED / spotlight
-4. Siren / audio alarm
-5. Absolute zoom/focus
-6. Motion state/config
-7. AI state/config
-8. Image settings
-9. Encoding settings
-10. Snapshot diagnostics
-11. Recording search/download
-12. Optional model-specific features
+1. Add focused tests for any new response shape or firmware quirk.
+2. Complete siren stop/configuration semantics if required by supported cameras.
+3. Motion state/configuration.
+4. AI state/configuration.
+5. Image settings.
+6. Encoding settings behind explicit confirmation.
+7. Guard/patrol and other model-specific PTZ features.
+8. Recording search/playback/download.
+9. Optional doorbell, tracking, and two-way-audio features.
