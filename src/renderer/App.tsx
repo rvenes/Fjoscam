@@ -5,6 +5,7 @@ import type { AppState, CameraConfig, CameraDiscoveryResult, CameraInput, Camera
 import { clickToPtzCommand, presetForKey, presetIdFromKey, zoomNudgeStep } from '../shared/ptz';
 import './styles.css';
 import { CameraTlsSettings } from './CameraTlsSettings';
+import { certificateProblem, errorMessage } from './cameraFeedback';
 import { useCameraWork } from './useCameraWork';
 import { usePlaybackHealth } from './usePlaybackHealth';
 import { coalescedWriter } from './coalescedWriter';
@@ -67,6 +68,8 @@ export default function App() {
   const viewerFullscreen = useWindowFullscreen();
   const [appVersion, setAppVersion] = useState('');
   const [showAbout, setShowAbout] = useState(false);
+  const [diagnosticStatus, setDiagnosticStatus] = useState('');
+  const [exportingDiagnostics, setExportingDiagnostics] = useState(false);
   const [updateStatus, setUpdateStatus] = useState<UpdateStatus | null>(null);
   const updateRevision = useRef(0);
   const [showUpdateDialog, setShowUpdateDialog] = useState(false);
@@ -84,6 +87,7 @@ export default function App() {
   const [snapshotUrl, setSnapshotUrl] = useState('');
   const [fallbackUrl, setFallbackUrl] = useState('');
   const [isStreamEnabled, setIsStreamEnabled] = useState(true);
+  const [systemSuspended, setSystemSuspended] = useState(false);
   const [streamFailure, setStreamFailure] = useState(false);
   const [streamRevision, setStreamRevision] = useState(0);
   const [cameraConfigRevision, setCameraConfigRevision] = useState(0);
@@ -128,6 +132,8 @@ export default function App() {
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState('');
   const [configurationError, setConfigurationError] = useState('');
+  const [tlsProblem, setTlsProblem] = useState<{ owner: ReturnType<typeof useCameraWork>; protocol: 'HTTPS' | 'RTSPS' }>();
+  const [highlightCertificate, setHighlightCertificate] = useState(false);
 
   const activeCamera = useMemo(
     () => state.cameras.find((camera) => camera.id === state.activeCameraId) ?? null,
@@ -146,17 +152,24 @@ export default function App() {
     (patch) => window.fjoscam.setIrLights(activeCamera!.id, patch.mode)), [cameraWork, controls.ir]);
   useLayoutEffect(() => () => lightWriter.cancel(), [lightWriter]);
   useLayoutEffect(() => () => irWriter.cancel(), [irWriter]);
-  const playback = usePlaybackHealth(streamSrc(), isStreamEnabled, () => {
+  const playback = usePlaybackHealth(streamSrc(), isStreamEnabled && !systemSuspended, () => {
     setStreamFailure(false);
     setStreamRevision((value) => value + 1);
   });
-  const playbackText = streamFailure ? 'Playback failed. Reconnect to retry.' : playback.text;
+  const playbackText = systemSuspended ? 'Computer sleeping · playback paused' : streamFailure ? 'Playback failed. Reconnect to retry.' : playback.text;
   const modalOpen = showSettings || showAbout || showPresetDialog || (showUpdateDialog && !!updateStatus);
   useLayoutEffect(() => {
     if (modalOpen) { cancelZoomWork(); void stopHeldPtz(); }
   }, [modalOpen]);
 
+  function reportCameraError(error: unknown) {
+    const protocol = certificateProblem(error);
+    if (protocol) setTlsProblem({ owner: cameraWork, protocol });
+    setMessage(errorMessage(error));
+  }
+
   function clearCameraWork() {
+    setTlsProblem(undefined);
     lightWriter.cancel(); irWriter.cancel();
     cameraWork.invalidate();
     clearCurrentStream();
@@ -400,15 +413,28 @@ export default function App() {
     const current = cameraWork.capture('presets');
     void window.fjoscam.getPresets(activeCamera.id).then((value) => {
       if (!cancelled && current()) setPresets(value);
-    }).catch((error) => { if (!cancelled && current()) setMessage(errorMessage(error)); });
+    }).catch((error) => { if (!cancelled && current()) reportCameraError(error); });
     return () => { cancelled = true; };
   }, [cameraWork, controls.presets, isReolinkCamera]);
 
   useEffect(() => { void stopHeldPtz(); }, [controls.move, controls.zoom, controls.focus]);
 
+  useEffect(() => window.fjoscam.onPowerState((powerState) => {
+    if (powerState === 'suspend') {
+      setSystemSuspended(true);
+      teleZoomPending.current = null;
+      cancelZoomWork();
+      void stopHeldPtz();
+      clearCurrentStream();
+    } else {
+      setSystemSuspended(false);
+      if (isStreamEnabled) setCameraConfigRevision((value) => value + 1);
+    }
+  }), [cameraWork, isStreamEnabled]);
+
   useEffect(() => {
     if (!activeCamera || viewChanging.current) return;
-    if (!isStreamEnabled) {
+    if (!isStreamEnabled || systemSuspended) {
       clearCurrentStream();
       setMessage('Disconnected');
       setStatus(null);
@@ -416,7 +442,7 @@ export default function App() {
     }
     void loadWebRtcRuntime(activeCamera.id);
     return () => { runtimeLoadRef.current += 1; };
-  }, [cameraWork, isStreamEnabled]);
+  }, [cameraWork, isStreamEnabled, systemSuspended]);
 
   useEffect(() => {
     applyWebRtcAudioSettings();
@@ -493,12 +519,12 @@ export default function App() {
       await Promise.all([
         nextProfile?.capabilities.irLights ? window.fjoscam.getIrLights(id).then((value) => {
           if (currentIr() && !irWriter.busy()) setIrLights(value);
-        }).catch((error) => { if (currentIr()) setMessage(errorMessage(error)); }) : undefined,
+        }).catch((error) => { if (currentIr()) reportCameraError(error); }) : undefined,
         nextProfile?.capabilities.whiteLed ? window.fjoscam.getWhiteLed(id).then((value) => {
           if (currentLed() && !lightWriter.busy()) setWhiteLed(value);
-        }).catch((error) => { if (currentLed()) setMessage(errorMessage(error)); }) : undefined,
+        }).catch((error) => { if (currentLed()) reportCameraError(error); }) : undefined,
       ]);
-    } catch (error) { if (current()) setMessage(errorMessage(error)); }
+    } catch (error) { if (current()) reportCameraError(error); }
   }
 
   async function refresh() {
@@ -598,7 +624,7 @@ export default function App() {
       if (!current()) return;
       setFallbackUrl(nextFallbackUrl);
     } catch (error) {
-      if (current()) { setStreamFailure(true); setMessage(errorMessage(error)); }
+      if (current()) { setStreamFailure(true); reportCameraError(error); }
     }
   }
 
@@ -641,6 +667,7 @@ export default function App() {
       const result = await window.fjoscam.testCamera(id);
       if (!current()) return;
       setStatus(result);
+      if (!result.ok && certificateProblem(result.message)) reportCameraError(result.message);
       if (result.presets && controls.presets) setPresets(result.presets);
       if (result.streams && metadataCurrent()) setStreamInfo(result.streams);
       if (result.cameraName && activeCamera && activeCamera.name !== result.cameraName) {
@@ -652,7 +679,7 @@ export default function App() {
         }, false);
       }
     } catch (error) {
-      if (current()) setMessage(errorMessage(error));
+      if (current()) reportCameraError(error);
     } finally { finish(); }
   }
 
@@ -686,7 +713,7 @@ export default function App() {
     const current = cameraWork.capture('ir');
     setMessage('Updating IR lights...');
     setIrLights((value) => (value ? { ...value, mode } : { mode, options: ['auto', 'on', 'off'] }));
-    irWriter.push({ mode }, { current, success: () => setMessage('IR lights updated'), error: (error) => setMessage(errorMessage(error)) });
+    irWriter.push({ mode }, { current, success: () => setMessage('IR lights updated'), error: (error) => reportCameraError(error) });
   }
 
   // Spotlight behaviour: 0 = off (IR night vision takes over), 1 = auto at
@@ -699,7 +726,7 @@ export default function App() {
     setWhiteLed((value) => ({ ...value, enabled: mode !== 0, mode }));
     lightWriter.push({ mode }, { current,
       success: () => setMessage(mode === 0 ? 'Spotlight off - IR night vision active' : mode === 1 ? 'Spotlight auto (motion at night)' : 'Spotlight on camera schedule'),
-      error: (error) => setMessage(errorMessage(error)) });
+      error: (error) => reportCameraError(error) });
   }
 
   async function setLegacyCameraLight(enabled: boolean) {
@@ -710,7 +737,7 @@ export default function App() {
     setMessage('Updating spotlight...');
     setWhiteLed((value) => ({ ...value, enabled, brightness }));
     lightWriter.push({ enabled, brightness }, { current, success: () => setMessage(enabled ? 'Spotlight on' : 'Spotlight off'),
-      error: (error) => setMessage(errorMessage(error)) });
+      error: (error) => reportCameraError(error) });
   }
 
   async function setCameraLightBrightness(brightness: number) {
@@ -720,7 +747,7 @@ export default function App() {
     setWhiteLed((value) => ({ ...value, enabled: value?.enabled ?? false, brightness, supportsBrightness: true }));
     setMessage('Updating spotlight...');
     lightWriter.push({ brightness }, { current, success: () => setMessage(`Spotlight brightness ${brightness}%`),
-      error: (error) => setMessage(errorMessage(error)) }, 150);
+      error: (error) => reportCameraError(error) }, 150);
   }
 
   async function playSiren() {
@@ -734,7 +761,7 @@ export default function App() {
       if (!current()) return;
       setMessage('Siren command sent');
     } catch (error) {
-      if (current()) setMessage(errorMessage(error));
+      if (current()) reportCameraError(error);
     }
   }
 
@@ -812,7 +839,8 @@ export default function App() {
     });
   }
 
-  function editCamera(camera: CameraConfig) {
+  function editCamera(camera: CameraConfig, reviewCertificate = false) {
+    setHighlightCertificate(reviewCertificate);
     setForm({
       ...camera,
       kind: camera.kind ?? 'reolink',
@@ -826,6 +854,7 @@ export default function App() {
 
   function closeSettings() {
     setShowSettings(false);
+    setHighlightCertificate(false);
     setForm(defaultInput);
     setEditingId(undefined);
   }
@@ -846,7 +875,7 @@ export default function App() {
       // Preset recall usually moves the optical zoom as well.
       if (command.kind === 'preset' && isReolinkCamera) scheduleZoomRefresh(2500);
     } catch (error) {
-      if (current()) setMessage(errorMessage(error));
+      if (current()) reportCameraError(error);
     }
   }
 
@@ -857,7 +886,7 @@ export default function App() {
     zoomHoldRef.current = false;
     if (!cameraId) return;
     try { await window.fjoscam.sendPtz(cameraId, { kind: 'stop' }); }
-    catch (error) { if (current()) setMessage(errorMessage(error)); }
+    catch (error) { if (current()) reportCameraError(error); }
   }
 
   function startZoomHold(direction: 'in' | 'out') {
@@ -906,7 +935,7 @@ export default function App() {
       const result = await window.fjoscam.setZoomPosition(cameraId, target);
       if (current() && zoomTargetRef.current === null) applyZoomState(result);
     } catch (error) {
-      if (current()) setMessage(errorMessage(error));
+      if (current()) reportCameraError(error);
     } finally {
       if (current()) {
         zoomBusyRef.current = false;
@@ -1582,6 +1611,11 @@ export default function App() {
           <div className={`status ${configurationError ? 'bad' : ''}`}>
             {configurationError || message || (status?.scope ? '' : status?.message) || (!activeCamera ? 'No camera' : '')}
           </div>
+          {activeCamera && tlsProblem?.owner === cameraWork && <div className="certificate-problem" role="alert">
+            <strong>{tlsProblem.protocol === 'HTTPS' ? 'Camera controls need certificate approval.' : 'Stream certificate needs approval.'}</strong>
+            <span>{tlsProblem.protocol === 'HTTPS' ? 'Video may still work because it uses a separate connection. ' : ''}Inspect the certificate, verify its fingerprint, then save the camera. A changed certificate must be verified again.</span>
+            <button type="button" onClick={() => editCamera(activeCamera, true)}>Review {tlsProblem.protocol} certificate</button>
+          </div>}
         </footer>
       </section>
 
@@ -1619,7 +1653,15 @@ export default function App() {
             <p className="muted-text">Low-latency Reolink LAN viewer.</p>
             <div className="modal-actions">
               <button type="button" onClick={() => void checkForUpdates()}>Check for updates</button>
+              <button type="button" disabled={exportingDiagnostics} onClick={() => {
+                setExportingDiagnostics(true); setDiagnosticStatus('');
+                void window.fjoscam.exportDiagnostics().then((saved) => setDiagnosticStatus(saved ? 'Diagnostic report saved.' : 'Export cancelled.'),
+                  () => setDiagnosticStatus('Could not save the diagnostic report. Try another folder.'))
+                  .finally(() => setExportingDiagnostics(false));
+              }}>Save diagnostics...</button>
             </div>
+            <p className="muted-text">The report includes app/runtime versions and camera setting categories. It excludes camera addresses, names, usernames, credentials, images and logs. Nothing is uploaded.</p>
+            {diagnosticStatus && <p role="status">{diagnosticStatus}</p>}
             <section className="donation-section">
               <h3>Support development</h3>
               <p>
@@ -1745,8 +1787,8 @@ export default function App() {
                 </>
               )}
             </div>
-            {form.kind !== 'generic' && form.protocol === 'https' && <CameraTlsSettings key={editingId ?? 'new'} target={form} trust={form.httpsTrust} onChange={(httpsTrust) => setForm((current) => ({ ...current, httpsTrust }))} />}
-            {form.kind === 'generic' && <CameraTlsSettings key={`stream-${editingId ?? 'new'}`} stream={{ url: form.streamUrl ?? '', cameraId: editingId }} trust={form.rtspsTrust} onChange={(rtspsTrust) => setForm((current) => ({ ...current, rtspsTrust }))} />}
+            {form.kind !== 'generic' && form.protocol === 'https' && <CameraTlsSettings highlighted={highlightCertificate} key={editingId ?? 'new'} target={form} trust={form.httpsTrust} onChange={(httpsTrust) => setForm((current) => ({ ...current, httpsTrust }))} />}
+            {form.kind === 'generic' && <CameraTlsSettings highlighted={highlightCertificate} key={`stream-${editingId ?? 'new'}`} stream={{ url: form.streamUrl ?? '', cameraId: editingId }} trust={form.rtspsTrust} onChange={(rtspsTrust) => setForm((current) => ({ ...current, rtspsTrust }))} />}
             {form.kind === 'reolink' && <section className="camera-onvif" aria-label="ONVIF fallback">
               <label className="check-row">
                 <input type="checkbox" checked={form.allowInsecureOnvif === true} onChange={(event) => setForm({ ...form, allowInsecureOnvif: event.target.checked })} />
@@ -1763,7 +1805,7 @@ export default function App() {
             )}
             <div className="modal-actions">
               {activeCamera && <button type="button" onClick={() => editCamera(activeCamera)}>Edit active</button>}
-              <button type="submit" disabled={busy}>{busy ? 'Saving...' : 'Save camera'}</button>
+              <button type="submit" disabled={busy}>{busy ? 'Saving...' : highlightCertificate ? 'Save camera and retry' : 'Save camera'}</button>
             </div>
             {(configurationError || message) && <p className="form-message">{configurationError || message}</p>}
           </form>
@@ -1791,9 +1833,6 @@ function ClickZoneOverlay() {
   );
 }
 
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
 
 function irOptionLabel(mode: IrLightMode): string {
   switch (mode) {

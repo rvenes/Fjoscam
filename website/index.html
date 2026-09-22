@@ -57,7 +57,7 @@
       <a class="btn secondary" href="https://github.com/rvenes/Fjoscam">GitHub · MIT License</a>
     </div>
     <p class="download-note">
-      Version 1.0.8 · Windows x64 · macOS 12 or later, Apple Silicon or Intel.<br>Mac packages are Apple Development signed, but not notarized by Apple. Windows packages are unsigned; your operating system may show an installation warning.
+      Version 1.0.9 · Windows x64 · macOS 12 or later, Apple Silicon or Intel.<br>Mac packages are Apple Development signed, but not notarized by Apple. Windows packages are unsigned; your operating system may show an installation warning.
     </p>
 
     <div class="tagrow">
@@ -86,8 +86,22 @@
     </p>
   </section>
 
+  <section id="release-1-0-9">
+    <h2>What’s new in Fjoscam 1.0.9</h2>
+    <p class="muted">Released 22 September 2026. Clearer certificate recovery for camera controls, playback recovery after sleep, and private local diagnostics.</p>
+    <ul class="feature-list">
+      <li><span class="good">Restore HTTPS camera controls</span><br>A persistent warning explains why video can work while PTZ or presets are blocked. Review HTTPS certificate opens the correct camera directly at certificate inspection.</li>
+      <li><span class="good">Clearer connection errors</span><br>Technical remote-method prefixes are removed. Certificate warnings survive successful video playback and disappear when switching to a different camera. RTSPS certificate rejection is distinguished from ordinary connection failure.</li>
+      <li><span class="good">Resume after sleep</span><br>Fjoscam attempts to stop held camera movement before reopening active playback. It preserves quality and audio choices and keeps manually disconnected views disconnected.</li>
+      <li><span class="good">Local diagnostic report</span><br>Help → About Fjoscam → Save diagnostics saves runtime versions and anonymous setting categories. No camera addresses, names, usernames, credentials, images or raw logs are included, and nothing is uploaded.</li>
+    </ul>
+    <h3>Video works, but camera movement fails?</h3>
+    <p>Camera controls and video use separate connections. With a self-signed HTTPS certificate, use <strong>Review HTTPS certificate → Inspect HTTPS certificate</strong>, independently verify the fingerprint, select <strong>Use this certificate</strong>, then <strong>Save camera and retry</strong>. No certificate is trusted automatically, and HTTPS is not silently changed to HTTP.</p>
+    <p><a class="btn secondary" href="https://github.com/rvenes/Fjoscam/blob/main/docs/release-1.0.9.md">Read the full 1.0.9 release notes</a></p>
+  </section>
+
   <section id="release-1-0-8">
-    <h2>What’s new in Fjoscam 1.0.8</h2>
+    <h2>Previous release: Fjoscam 1.0.8</h2>
     <p class="muted">Released 22 September 2026. This release improves connection security, video recovery and everyday camera controls on Windows, Mac Apple Silicon and Mac Intel.</p>
     <ul class="feature-list">
       <li><span class="good">Safer saved credentials</span><br>Generic RTSP/RTSPS stream URLs are now encrypted with the operating system, alongside camera passwords. Existing valid configuration and backup files are migrated automatically.</li>

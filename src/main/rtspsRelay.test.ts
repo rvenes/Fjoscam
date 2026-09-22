@@ -64,7 +64,7 @@ describe('verified RTSPS transport', () => {
     setDefaultCACertificates([...roots, first.cert.toString(), second.cert.toString()]);
     const socket = await connectRtsps(endpoint); socket.destroy();
     server.setSecureContext(second);
-    await expect(connectRtsps(endpoint)).rejects.toThrow('certificate');
+    await expect(connectRtsps(endpoint)).rejects.toThrow('RTSPS certificate was not trusted.');
     expect(bytes).toBe(0);
   });
 

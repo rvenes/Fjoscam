@@ -1,12 +1,13 @@
 import { useEffect, useRef, useState } from 'react';
 import type { CertificateInfo, HttpsTarget, HttpsTrust } from '../shared/types';
 
-export function CameraTlsSettings({ target, stream, trust, onChange }: ({
+export function CameraTlsSettings({ target, stream, trust, onChange, highlighted = false }: ({
   target: HttpsTarget; stream?: undefined;
 } | {
   target?: undefined; stream: { url: string; cameraId?: string };
 }) & {
   trust?: HttpsTrust;
+  highlighted?: boolean;
   onChange: (trust?: HttpsTrust) => void;
 }) {
   const protocol = stream ? 'RTSPS' : 'HTTPS';
@@ -15,6 +16,13 @@ export function CameraTlsSettings({ target, stream, trust, onChange }: ({
   const [error, setError] = useState('');
   const [confirmed, setConfirmed] = useState(false);
   const generation = useRef(0);
+  const inspectButton = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    if (highlighted) {
+      inspectButton.current?.scrollIntoView?.({ block: 'center' });
+      inspectButton.current?.focus();
+    }
+  }, [highlighted]);
   useEffect(() => {
     generation.current += 1;
     setCertificate(undefined); setConfirmed(false); setError(''); setBusy(false);
@@ -43,7 +51,7 @@ export function CameraTlsSettings({ target, stream, trust, onChange }: ({
       <p>{trust.origin}<br /><code>{trust.fingerprint256}</code></p>
       <button type="button" onClick={() => { onChange(undefined); setConfirmed(false); }}>Remove certificate exception</button>
     </>}
-    <button type="button" disabled={busy || (stream ? !stream.url.trim() && !stream.cameraId : !target.host.trim())} onClick={() => void inspect()}>{busy ? 'Inspecting certificate...' : `Inspect ${protocol} certificate`}</button>
+    <button ref={inspectButton} type="button" disabled={busy || (stream ? !stream.url.trim() && !stream.cameraId : !target.host.trim())} onClick={() => void inspect()}>{busy ? 'Inspecting certificate...' : `Inspect ${protocol} certificate`}</button>
     {certificate && <div>
       <p><strong>{certificate.origin}</strong><br />Issued to: {certificate.subject || '(not specified)'}<br />Issuer: {certificate.issuer || '(not specified)'}<br />Valid: {certificate.validFrom} – {certificate.validTo}</p>
       <p>SHA-256 fingerprint<br /><code>{certificate.fingerprint256}</code></p>

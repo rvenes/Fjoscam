@@ -5,6 +5,9 @@ import type { BridgeHealth, CameraWithSecret, PtzCommand } from '../shared/types
 
 const state = vi.hoisted(() => ({
   appEvents: new Map<string, (...args: any[]) => void>(),
+  powerEvents: new Map<string, () => void>(),
+  saveDialog: vi.fn(async () => ({ canceled: true, filePath: undefined as string | undefined })),
+  writeReport: vi.fn(async () => undefined),
   handlers: new Map<string, (...args: any[]) => any>(),
   windows: [] as any[],
   primary: true,
@@ -34,7 +37,7 @@ const state = vi.hoisted(() => ({
 }));
 vi.mock('electron', () => ({
   app: {
-    requestSingleInstanceLock: () => state.primary, quit: state.quit,
+    requestSingleInstanceLock: () => state.primary, quit: state.quit, getVersion: () => 'test-version',
     isPackaged: false, isReady: () => true, whenReady: () => Promise.resolve(),
     on: (name: string, fn: (...args: any[]) => void) => state.appEvents.set(name, fn),
   },
@@ -51,10 +54,12 @@ vi.mock('electron', () => ({
   },
   Menu: { buildFromTemplate: () => [], setApplicationMenu: vi.fn() },
   ipcMain: { handle: (name: string, fn: (...args: any[]) => any) => state.handlers.set(name, fn) },
+  powerMonitor: { on: (name: string, fn: () => void) => state.powerEvents.set(name, fn) },
   session: { defaultSession: { webRequest: { onBeforeSendHeaders: vi.fn() } } },
   shell: {},
-  dialog: { showErrorBox: state.showError },
+  dialog: { showErrorBox: state.showError, showSaveDialog: state.saveDialog },
 }));
+vi.mock('node:fs/promises', () => ({ writeFile: state.writeReport }));
 vi.mock('./store.js', () => ({ CameraStore: class { getState = state.getState; getCameraWithSecret = state.getCamera; saveCamera = state.saveCamera; removeCamera = state.removeCamera; setStreamChannel = state.setStreamChannel; setStreamQuality = state.setStreamQuality; } }));
 vi.mock('./snapshotServer.js', () => ({ SnapshotServer: class { start = state.snapshotStart; stop = state.snapshotStop; testPanasonic = state.testPanasonic; invalidateCamera = state.invalidateSnapshot; releaseAll = state.releaseSnapshots; } }));
 vi.mock('./go2rtcBridge.js', () => ({ Go2RtcBridge: class { stop = state.bridgeStop; invalidateCamera = state.invalidateStream; observePlayback = state.observePlayback; releaseAll = state.releaseStreams; } }));
@@ -74,11 +79,63 @@ const validCamera: CameraWithSecret = { id: 'camera', kind: 'reolink', name: 'Sy
 beforeEach(() => {
   vi.resetModules();
   vi.clearAllMocks();
-  state.appEvents.clear(); state.handlers.clear(); state.windows.length = 0; state.primary = true;
+  state.appEvents.clear(); state.powerEvents.clear(); state.handlers.clear(); state.windows.length = 0; state.primary = true;
 });
 afterEach(() => { Object.defineProperty(process, 'platform', { value: originalPlatform }); });
 
 describe('application service lifetime', () => {
+  it('does not write diagnostics when the save dialog is cancelled', async () => {
+    state.saveDialog.mockResolvedValueOnce({ canceled: true, filePath: undefined });
+    await import('./main.js');
+    await vi.waitFor(() => expect(state.handlers.has('app:export-diagnostics')).toBe(true));
+    const sender = state.windows[0].webContents;
+    expect(await state.handlers.get('app:export-diagnostics')!({ sender, senderFrame: sender.mainFrame })).toBe(false);
+    expect(state.writeReport).not.toHaveBeenCalled();
+  });
+  it('saves diagnostics only to the user-selected file and hides filesystem errors', async () => {
+    state.saveDialog.mockResolvedValue({ canceled: false, filePath: 'selected-report.json' });
+    state.getState.mockResolvedValueOnce({ cameras: [], activeCameraId: null });
+    await import('./main.js');
+    await vi.waitFor(() => expect(state.handlers.has('app:export-diagnostics')).toBe(true));
+    const sender = state.windows[0].webContents; const event = { sender, senderFrame: sender.mainFrame };
+    expect(await state.handlers.get('app:export-diagnostics')!(event)).toBe(true);
+    expect(state.writeReport).toHaveBeenCalledWith('selected-report.json', expect.stringContaining('Settings and main-process runtime only'), { encoding: 'utf8', mode: 0o600 });
+    state.writeReport.mockRejectedValueOnce(new Error('EACCES private-directory'));
+    await expect(state.handlers.get('app:export-diagnostics')!(event)).rejects.toThrow(/^Could not save the diagnostic report\. Try another folder\.$/);
+  });
+  it('ignores an old resume that completes after another suspend', async () => {
+    let finishMove!: () => void;
+    state.getCamera.mockResolvedValue(validCamera);
+    state.sendPtz.mockImplementationOnce(() => new Promise((resolve) => { finishMove = resolve; }));
+    await import('./main.js');
+    await vi.waitFor(() => expect(state.powerEvents.has('resume')).toBe(true));
+    const sender = state.windows[0].webContents; const event = { sender, senderFrame: sender.mainFrame };
+    const move = state.handlers.get('camera:ptz')!(event, 'camera', { kind: 'move', direction: 'Left', speed: 10 });
+    await vi.waitFor(() => expect(state.sendPtz).toHaveBeenCalledOnce());
+    state.powerEvents.get('resume')!(); state.powerEvents.get('suspend')!();
+    finishMove(); await move;
+    await vi.waitFor(() => expect(state.sendPtz.mock.calls.some((call) => call[1].kind === 'stop')).toBe(true));
+    expect(sender.send).not.toHaveBeenCalledWith('app:power-state', 'resume');
+    expect(() => state.handlers.get('camera:ptz')!(event, 'camera', { kind: 'move', direction: 'Right', speed: 10 })).toThrow('movement is paused');
+  });
+  it('attempts Stop before resume notification and blocks new movement during sleep', async () => {
+    let finishMove!: () => void;
+    state.getCamera.mockResolvedValue(validCamera);
+    state.sendPtz.mockImplementationOnce(() => new Promise((resolve) => { finishMove = resolve; }));
+    await import('./main.js');
+    await vi.waitFor(() => expect(state.powerEvents.has('resume')).toBe(true));
+    const sender = state.windows[0].webContents; const event = { sender, senderFrame: sender.mainFrame };
+    const move = state.handlers.get('camera:ptz')!(event, 'camera', { kind: 'move', direction: 'Left', speed: 10 });
+    await vi.waitFor(() => expect(state.sendPtz).toHaveBeenCalledOnce());
+    state.powerEvents.get('suspend')!();
+    expect(() => state.handlers.get('camera:ptz')!(event, 'camera', { kind: 'move', direction: 'Right', speed: 10 })).toThrow('movement is paused');
+    expect(() => state.handlers.get('camera:set-zoom-position')!(event, 'camera', 5)).toThrow('movement is paused');
+    state.powerEvents.get('resume')!();
+    expect(sender.send).not.toHaveBeenCalledWith('app:power-state', 'resume');
+    finishMove(); await move;
+    await vi.waitFor(() => expect(sender.send).toHaveBeenCalledWith('app:power-state', 'resume'));
+    expect(state.sendPtz.mock.calls.slice(1).every((call) => call[1].kind === 'stop')).toBe(true);
+  });
   it('drains accepted camera operations before installing and rejects new work during preparation', async () => {
     let finishRead!: () => void;
     state.getCamera.mockResolvedValue(validCamera);

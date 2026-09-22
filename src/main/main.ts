@@ -1,5 +1,6 @@
-import { app, BrowserWindow, Menu, dialog, ipcMain, session, shell } from 'electron';
+import { app, BrowserWindow, Menu, dialog, ipcMain, powerMonitor, session, shell } from 'electron';
 import { join } from 'node:path';
+import { writeFile } from 'node:fs/promises';
 import { pathToFileURL } from 'node:url';
 import { logToFile } from './logging.js';
 import { CameraStore } from './store.js';
@@ -16,6 +17,7 @@ import { inspectCameraCertificate, inspectStreamCertificate } from './cameraTls.
 import { validateIpcArguments } from './ipcValidation.js';
 import { normalizeHost } from '../shared/validation.js';
 import { isReolinkCamera } from '../shared/cameraControls.js';
+import { diagnosticReport } from './diagnosticReport.js';
 import type { CameraInput, CameraWithSecret, HttpsTarget, PtzCommand } from '../shared/types.js';
 
 const isDev = process.env.VITE_DEV_SERVER_URL || !app.isPackaged;
@@ -42,6 +44,8 @@ let shutdownPromise: Promise<void> | null = null;
 let shutdownComplete = false;
 let startupFailed = false;
 let isPreparingUpdate = false;
+let systemSuspended = false;
+let powerRevision = 0;
 const cameraOperations = new Set<Promise<unknown>>();
 let cameraEditMode = false;
 const isPrimaryInstance = app.requestSingleInstanceLock();
@@ -111,6 +115,26 @@ app.whenReady().then(async () => {
   registerIpc();
   createMenu();
   await createWindow();
+
+  powerMonitor.on('suspend', () => {
+    if (isShuttingDown || isPreparingUpdate) return;
+    systemSuspended = true;
+    powerRevision += 1;
+    void ptz.stopAll();
+    for (const window of BrowserWindow.getAllWindows()) window.webContents.send('app:power-state', 'suspend');
+  });
+  powerMonitor.on('resume', () => {
+    if (isShuttingDown || isPreparingUpdate) return;
+    const revision = ++powerRevision;
+    systemSuspended = true;
+    // Stop old held movement before reopening playback. Never replay movement.
+    void ptz.stopAll().then(() => {
+      if (revision !== powerRevision) return;
+      systemSuspended = false;
+      if (isShuttingDown || isPreparingUpdate) return;
+      for (const window of BrowserWindow.getAllWindows()) window.webContents.send('app:power-state', 'resume');
+    });
+  });
 
   app.on('activate', () => {
     if (!isShuttingDown && BrowserWindow.getAllWindows().length === 0) void createWindow().catch(handleStartupFailure);
@@ -252,6 +276,8 @@ function handleIpc(channel: string, listener: Parameters<typeof ipcMain.handle>[
     }
     validateIpcArguments(channel, args);
     if (isPreparingUpdate && channel !== 'app:quit-and-install-update') throw new Error('An update is being prepared. Try again when it finishes.');
+    if (systemSuspended && (channel === 'camera:set-zoom-position' ||
+        (channel === 'camera:ptz' && (args[1] as PtzCommand).kind !== 'stop'))) throw new Error('Camera movement is paused while the computer resumes.');
     const result = listener(event, ...args);
     if ((channel.startsWith('camera:') || channel === 'app:get-state') && result && typeof result.then === 'function') {
       const operation = Promise.resolve(result);
@@ -267,6 +293,19 @@ function handleIpc(channel: string, listener: Parameters<typeof ipcMain.handle>[
 function registerIpc(): void {
   handleIpc('app:get-state', () => store.getState());
   handleIpc('app:get-version', () => updater.getVersion());
+  handleIpc('app:export-diagnostics', async () => {
+    const result = await dialog.showSaveDialog({ title: 'Save Fjoscam diagnostic report',
+      defaultPath: `Fjoscam-diagnostics-${new Date().toISOString().slice(0, 10)}.json`,
+      filters: [{ name: 'JSON diagnostic report', extensions: ['json'] }] });
+    if (result.canceled || !result.filePath) return false;
+    const state = await store.getState();
+    const report = diagnosticReport(state, { version: app.getVersion(), platform: process.platform, arch: process.arch,
+      electron: process.versions.electron, node: process.versions.node, uptimeSeconds: Math.floor(process.uptime()),
+      mainMemoryBytes: process.memoryUsage().rss });
+    try { await writeFile(result.filePath, JSON.stringify(report, null, 2) + '\n', { encoding: 'utf8', mode: 0o600 }); }
+    catch { throw new Error('Could not save the diagnostic report. Try another folder.'); }
+    return true;
+  });
   handleIpc('app:check-for-updates', () => updater.checkForUpdates());
   handleIpc('app:download-update', () => updater.downloadUpdate());
   handleIpc('app:quit-and-install-update', () => updater.quitAndInstall());

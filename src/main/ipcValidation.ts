@@ -54,7 +54,7 @@ function whiteLed(value: unknown): boolean {
 // Every exposed channel must opt in. Validation happens before storage,
 // adapter calls, cache changes or PTZ queue/watchdog mutation.
 const contracts: Record<string, Check[]> = {
-  'app:get-state': [], 'app:get-version': [], 'app:get-fullscreen': [], 'app:check-for-updates': [],
+  'app:get-state': [], 'app:get-version': [], 'app:get-fullscreen': [], 'app:check-for-updates': [], 'app:export-diagnostics': [],
   'app:download-update': [], 'app:quit-and-install-update': [], 'app:set-fullscreen': [bool],
   'camera:save': [cameraInput, optional(id)],
   'camera:remove': [id],

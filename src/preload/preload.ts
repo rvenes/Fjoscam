@@ -24,6 +24,12 @@ import type {
 const api = {
   getState: (): Promise<AppState> => ipcRenderer.invoke('app:get-state'),
   getVersion: (): Promise<string> => ipcRenderer.invoke('app:get-version'),
+  exportDiagnostics: (): Promise<boolean> => ipcRenderer.invoke('app:export-diagnostics'),
+  onPowerState: (callback: (state: 'suspend' | 'resume') => void): (() => void) => {
+    const listener = (_event: IpcRendererEvent, state: unknown) => { if (state === 'suspend' || state === 'resume') callback(state); };
+    ipcRenderer.on('app:power-state', listener);
+    return () => ipcRenderer.removeListener('app:power-state', listener);
+  },
   checkForUpdates: (): Promise<UpdateStatus> => ipcRenderer.invoke('app:check-for-updates'),
   downloadUpdate: (): Promise<UpdateStatus> => ipcRenderer.invoke('app:download-update'),
   quitAndInstallUpdate: (): Promise<void> => ipcRenderer.invoke('app:quit-and-install-update'),

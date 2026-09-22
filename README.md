@@ -121,6 +121,8 @@ Snapshot and Panasonic MJPEG requests also have an explicit lifetime: closing th
 
 ## HTTPS camera certificates
 
+In 1.0.9, a rejected certificate produces a persistent **Camera controls need certificate approval** notice even when video is playing. **Review HTTPS certificate** opens the affected camera directly at the certificate controls. After inspection and independent fingerprint verification, use **Save camera and retry**. Nothing is trusted automatically. Generic RTSPS certificate failures have equivalent guidance.
+
 Reolink HTTPS API/snapshots and Panasonic HTTPS MJPEG/controls verify certificates by default. Existing cameras with self-signed certificates may require a one-time action after updating:
 
 1. Edit the camera, select HTTPS and its correct HTTPS port.
@@ -159,6 +161,10 @@ When movement uses ONVIF, Stop follows that transport and retains the profile us
 Explicit NVR channel/preset mapping, Media2 and HTTPS ONVIF remain follow-up work. The [original ONVIF progress log](docs/utbetring-onvif-framdrift.md) records earlier limitations; the discovery and movement logs above describe the subsequent fixes.
 
 ## Updates and releases
+
+On OS suspend, Fjoscam attempts PTZ Stop and pauses playback. On resume it attempts Stop before reopening enabled playback; it never replays movement or reconnects a manually disconnected view. Quality and audio choices are preserved. An offline camera cannot acknowledge Stop.
+
+For local troubleshooting, **Help → About Fjoscam → Save diagnostics…** saves an explicit JSON allowlist of runtime information and anonymous setting categories. No camera names, IDs, addresses, usernames, credentials, stream URLs, certificate contents, images or raw logs are included. Nothing is uploaded. This is not a connection test; memory covers only the main process.
 
 Packaged builds use `electron-updater` with the generic feed at `https://venes.org/fjoscam/`.
 

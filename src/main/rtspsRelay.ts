@@ -22,9 +22,11 @@ export function connectRtsps(endpoint: string, trust?: CertificateTrust, signal?
     const abort = () => socket.destroy(new Error('RTSPS connection cancelled.'));
     signal?.addEventListener('abort', abort, { once: true });
     const timer = setTimeout(() => socket.destroy(new Error('TLS timeout')), 5000);
-    socket.on('error', () => {
+    socket.on('error', (error: NodeJS.ErrnoException) => {
       clearTimeout(timer);
-      reject(new Error('RTSPS connection failed. Check the stream address and certificate in camera settings.'));
+      reject(new Error(/CERT|SELF_SIGNED|UNABLE_TO_VERIFY|UNABLE_TO_GET_ISSUER/.test(error.code || '')
+        ? 'RTSPS certificate was not trusted. Verify it in camera settings before trusting it.'
+        : 'RTSPS connection failed. Check the stream address and certificate in camera settings.'));
     });
     socket.once('close', () => { clearTimeout(timer); signal?.removeEventListener('abort', abort); reject(new Error('RTSPS connection closed before verification.')); });
     socket.once('secureConnect', () => {

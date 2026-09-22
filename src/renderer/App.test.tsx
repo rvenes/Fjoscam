@@ -18,6 +18,7 @@ beforeEach(() => {
     getState: async () => state, getVersion: async () => 'test',
     getFullscreen: async () => false, setFullscreen: vi.fn(async () => undefined), onFullscreenChanged: () => () => {},
     onOpenPanel: () => () => {}, onCameraEditMode: () => () => {}, onUpdateStatus: () => () => {}, onOpenAbout: () => () => {},
+    onPowerState: () => () => {},
     getProfile: async () => profile, getIrLights: async () => undefined, getWhiteLed: async () => undefined, getStreamInfo: async () => ({}),
     getZoomFocus: async () => ({}), getPresets: async () => [], getMjpegUrl: async () => '',
     getWebRtcStream: async () => ({ pageUrl: 'http://127.0.0.1/stream.html' }), setStreamAudio: async () => undefined,
@@ -40,6 +41,78 @@ const profile: CameraProfile = { device: { model: 'Synthetic camera', firmware: 
   capabilities: { ptz: true, presets: true, zoomFocus: true, irLights: true, whiteLed: true, siren: false, motion: false, ai: false } };
 
 describe('camera view ownership', () => {
+  it('reopens enabled playback after resume without moving the camera', async () => {
+    let emit!: (power: 'suspend' | 'resume') => void;
+    window.fjoscam.onPowerState = (callback) => { emit = callback; return () => {}; };
+    const stream = vi.spyOn(window.fjoscam, 'getWebRtcStream');
+    const view = render(<App />); await view.findByTitle('Camera A WebRTC live view');
+    act(() => emit('suspend'));
+    await waitFor(() => expect(view.queryByTitle('Camera A WebRTC live view')).toBeNull());
+    expect(window.fjoscam.releaseStream).toHaveBeenCalledWith('A');
+    act(() => emit('resume'));
+    await view.findByTitle('Camera A WebRTC live view');
+    expect(stream).toHaveBeenCalledTimes(2);
+    expect(sendPtz).not.toHaveBeenCalled();
+  });
+  it('keeps a manually disconnected stream disconnected after resume', async () => {
+    let emit!: (power: 'suspend' | 'resume') => void;
+    window.fjoscam.onPowerState = (callback) => { emit = callback; return () => {}; };
+    const stream = vi.spyOn(window.fjoscam, 'getWebRtcStream');
+    const view = render(<App />); await view.findByTitle('Camera A WebRTC live view');
+    fireEvent.click(view.getByRole('button', { name: 'Disconnect' }));
+    act(() => emit('suspend')); act(() => emit('resume'));
+    expect(view.queryByTitle('Camera A WebRTC live view')).toBeNull();
+    expect(stream).toHaveBeenCalledTimes(1);
+    expect(sendPtz).not.toHaveBeenCalled();
+  });
+  it('keeps certificate guidance when video succeeds and opens the affected camera without trusting it', async () => {
+    const secureCamera = { ...cameras[0], protocol: 'https' as const, httpPort: 443 };
+    window.fjoscam.getState = async () => ({ cameras: [secureCamera, cameras[1]], activeCameraId: 'A' });
+    const stream = deferred<{ pageUrl: string }>();
+    window.fjoscam.getWebRtcStream = vi.fn(() => stream.promise as ReturnType<FjoscamApi['getWebRtcStream']>);
+    window.fjoscam.getPresets = vi.fn().mockRejectedValue(new Error("Error invoking remote method 'camera:get-presets': Error: Camera HTTPS certificate was not trusted."));
+    window.fjoscam.inspectCertificate = vi.fn();
+    window.fjoscam.saveCamera = vi.fn();
+    const view = render(<App />);
+    await view.findByText('Camera controls need certificate approval.');
+    await act(async () => stream.resolve({ pageUrl: 'http://127.0.0.1/stream.html' }));
+    await view.findByTitle('Camera A WebRTC live view');
+    expect(view.getByText('Camera controls need certificate approval.')).toBeInTheDocument();
+    fireEvent.click(view.getByRole('button', { name: 'Review HTTPS certificate' }));
+    expect(view.getByRole('dialog', { name: 'Edit camera' })).toBeInTheDocument();
+    expect(view.getByLabelText('Name')).toHaveValue('Camera A');
+    expect(view.getByRole('button', { name: 'Inspect HTTPS certificate' })).toHaveFocus();
+    expect(window.fjoscam.inspectCertificate).not.toHaveBeenCalled();
+    expect(window.fjoscam.saveCamera).not.toHaveBeenCalled();
+  });
+  it('does not carry a certificate failure to another camera', async () => {
+    window.fjoscam.getPresets = vi.fn().mockRejectedValueOnce(new Error('Camera HTTPS certificate was not trusted.')).mockResolvedValue([]);
+    const view = render(<App />);
+    await view.findByText('Camera controls need certificate approval.');
+    fireEvent.click(view.getByRole('button', { name: /Camera B/ }));
+    await view.findByTitle('Camera B WebRTC live view');
+    expect(view.queryByText('Camera controls need certificate approval.')).toBeNull();
+  });
+  it('saves the explicitly confirmed certificate and retries controls with saved credentials preserved', async () => {
+    const secureCamera = { ...cameras[0], protocol: 'https' as const, httpPort: 443 };
+    const certificate = { origin: 'https://192.0.2.1', fingerprint256: Array(32).fill('AB').join(':'), subject: 'Synthetic camera', issuer: 'Synthetic issuer', validFrom: '2026', validTo: '2027' };
+    window.fjoscam.getState = async () => ({ cameras: [secureCamera], activeCameraId: 'A' });
+    window.fjoscam.getPresets = vi.fn().mockRejectedValueOnce(new Error('Camera HTTPS certificate was not trusted.')).mockResolvedValue([]);
+    window.fjoscam.inspectCertificate = vi.fn(async () => certificate);
+    window.fjoscam.saveCamera = vi.fn(async (input) => ({ cameras: [{ ...secureCamera, httpsTrust: input.httpsTrust }], activeCameraId: 'A' }));
+    const view = render(<App />);
+    fireEvent.click(await view.findByRole('button', { name: 'Review HTTPS certificate' }));
+    fireEvent.click(view.getByRole('button', { name: 'Inspect HTTPS certificate' }));
+    expect(await view.findByRole('button', { name: 'Use this certificate' })).toBeDisabled();
+    expect(window.fjoscam.saveCamera).not.toHaveBeenCalled();
+    fireEvent.click(view.getByLabelText('I have independently verified this fingerprint.'));
+    fireEvent.click(view.getByRole('button', { name: 'Use this certificate' }));
+    fireEvent.click(view.getByRole('button', { name: 'Save camera and retry' }));
+    await waitFor(() => expect(view.queryByRole('dialog', { name: 'Edit camera' })).toBeNull());
+    expect(window.fjoscam.saveCamera).toHaveBeenCalledWith(expect.objectContaining({ protocol: 'https', password: '', httpsTrust: { origin: certificate.origin, fingerprint256: certificate.fingerprint256 } }), 'A');
+    expect(view.queryByText('Camera controls need certificate approval.')).toBeNull();
+    await waitFor(() => expect(window.fjoscam.getPresets).toHaveBeenCalledTimes(2));
+  });
   it('shows installation preparation and removes the install action while it runs', async () => {
     let emit!: (status: UpdateStatus) => void;
     window.fjoscam.onUpdateStatus = (callback) => { emit = callback; return () => {}; };
