@@ -1,0 +1,290 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Fjoscam – Local camera viewer for easy PTZ control</title>
+  <meta name="description" content="Fjoscam is a local camera viewer for Windows and macOS, built for easy PTZ control, presets, audio and low-friction LAN monitoring.">
+  <style>
+    :root{
+      --bg:#0f172a; --card:#111827; --card2:#151f32; --text:#e5e7eb; --muted:#9ca3af;
+      --accent:#38bdf8; --good:#22c55e; --warn:#f59e0b; --border:#1f2937;
+    }
+    *{box-sizing:border-box}
+    body{margin:0;font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:radial-gradient(circle at top,#1e293b 0,var(--bg) 45%);color:var(--text);line-height:1.6}
+    main{max-width:1120px;margin:auto;padding:40px 20px 56px}
+    h1,h2,h3{margin-top:0;line-height:1.2}
+    h1{font-size:clamp(2.5rem,7vw,4.7rem);margin-bottom:14px}
+    h2{font-size:1.55rem}
+    h3{font-size:1.05rem;margin-bottom:8px}
+    p{margin-top:0}
+    .hero{text-align:center;padding:28px 0 10px}
+    .lead{max-width:820px;margin:0 auto 24px;color:var(--muted);font-size:1.18rem}
+    .buttons{display:flex;gap:12px;justify-content:center;flex-wrap:wrap;margin:24px 0}
+    .btn{display:inline-block;padding:13px 20px;border-radius:999px;text-decoration:none;font-weight:700;background:var(--accent);color:#082f49}
+    .btn.secondary{background:transparent;color:var(--text);border:1px solid var(--border)}
+    .btn.disabled{opacity:.5;pointer-events:none}
+    .download-note{color:var(--muted);font-size:.95rem}
+    .shot{margin:34px 0 22px}
+    .shot img{width:100%;border-radius:18px;border:1px solid var(--border);box-shadow:0 20px 55px rgba(0,0,0,.38)}
+    section,.card{background:rgba(17,24,39,.93);border:1px solid var(--border);border-radius:18px;padding:24px;margin-top:18px}
+    .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(275px,1fr));gap:18px;margin-top:18px}
+    .card{margin-top:0;background:rgba(21,31,50,.9)}
+    ul{padding-left:20px;margin-bottom:0}
+    li+li{margin-top:6px}
+    kbd{padding:2px 7px;border:1px solid #475569;border-bottom-width:3px;border-radius:6px;background:#020617;color:#fff;white-space:nowrap}
+    .muted{color:var(--muted)}
+    .good{color:var(--good);font-weight:700}
+    .tagrow{display:flex;gap:8px;flex-wrap:wrap;justify-content:center;margin-top:18px}
+    .tag{border:1px solid var(--border);background:#0b1220;border-radius:999px;padding:6px 11px;color:var(--muted);font-size:.95rem}
+    .feature-list{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:12px;padding-left:0;list-style:none}
+    .feature-list li{background:#0b1220;border:1px solid var(--border);border-radius:14px;padding:13px;margin:0}
+    footer{text-align:center;color:var(--muted);margin-top:28px;font-size:.95rem}
+  </style>
+</head>
+<body>
+<main>
+  <header class="hero">
+    <h1>Fjoscam</h1>
+    <p class="lead">
+      A local desktop app for LAN cameras, built for easy camera movement, live monitoring, PTZ control, audio, presets and keyboard-first daily use. Available for Windows and macOS.
+    </p>
+
+    <div class="buttons">
+      <a id="download-windows" class="btn disabled" href="#">Loading Windows version…</a>
+      <a id="download-mac-arm64" class="btn disabled" href="#">Loading Mac Apple Silicon…</a>
+      <a id="download-mac-intel" class="btn disabled" href="#">Loading Mac Intel…</a>
+      <a class="btn secondary" href="https://github.com/rvenes/Fjoscam">GitHub · MIT License</a>
+    </div>
+    <p class="download-note">
+      Version 1.0.8 · Windows x64 · macOS 12 or later, Apple Silicon or Intel.<br>Mac packages are Apple Development signed, but not notarized by Apple. Windows packages are unsigned; your operating system may show an installation warning.
+    </p>
+
+    <div class="tagrow">
+      <span class="tag">Windows</span>
+      <span class="tag">macOS Apple Silicon</span>
+      <span class="tag">macOS Intel</span>
+      <span class="tag">Local LAN</span>
+      <span class="tag">Reolink</span>
+      <span class="tag">UniFi / RTSP</span>
+      <span class="tag">Panasonic MJPEG</span>
+      <span class="tag">go2rtc</span>
+    </div>
+  </header>
+
+  <div class="shot">
+    <img src="fjoscam01.png" alt="Fjoscam screenshot showing camera list, PTZ controls and live video">
+  </div>
+
+  <section>
+    <h2>Why Fjoscam?</h2>
+    <p>
+      Fjoscam started after using the Reolink app for sheep monitoring during lambing season. In that situation, you want to move the camera, switch views and jump to saved positions without opening several menus first.
+    </p>
+    <p>
+      Fjoscam keeps the most useful controls directly available from the keyboard and the main window.
+    </p>
+  </section>
+
+  <section id="release-1-0-8">
+    <h2>What’s new in Fjoscam 1.0.8</h2>
+    <p class="muted">Released 22 September 2026. This release improves connection security, video recovery and everyday camera controls on Windows, Mac Apple Silicon and Mac Intel.</p>
+    <ul class="feature-list">
+      <li><span class="good">Safer saved credentials</span><br>Generic RTSP/RTSPS stream URLs are now encrypted with the operating system, alongside camera passwords. Existing valid configuration and backup files are migrated automatically.</li>
+      <li><span class="good">Verified camera certificates</span><br>HTTPS camera connections and generic RTSPS streams now verify certificates. Self-signed cameras have an explicit fingerprint inspection and confirmation workflow.</li>
+      <li><span class="good">Automatic video recovery</span><br>If the local video service crashes, Fjoscam makes a limited number of restart attempts and restores the active stream. Your selected High/Clear quality is preserved.</li>
+      <li><span class="good">More reliable camera controls</span><br>Improved Reolink authentication, capability detection, zoom and ONVIF movement/Stop handling when cameras are slow or offline.</li>
+      <li><span class="good">Clearer diagnostics</span><br>Camera search shows its network coverage and limits. Playback, updates and recovered camera settings have clearer status messages.</li>
+      <li><span class="good">Smoother daily use</span><br>More consistent fullscreen and dialog keyboard controls, less repeated camera polling, and better cleanup when switching cameras or closing the app.</li>
+      <li><span class="good">Refreshed platform builds</span><br>Updated dependencies and smaller bundled video components, with automated app, encrypted-connection and playback checks on all three platform targets.</li>
+    </ul>
+    <h3>Before updating</h3>
+    <ul>
+      <li>Self-signed HTTPS/RTSPS cameras may need a one-time certificate confirmation. Independently verify the fingerprint before accepting it.</li>
+      <li>ONVIF PTZ fallback is now an explicit per-camera opt-in, with a separate HTTP port. Reolink API controls remain the primary path.</li>
+      <li>Camera names, hosts and usernames are still ordinary local configuration. Encryption is tied to your OS account; older external backups are not changed.</li>
+      <li>Older Fjoscam versions cannot read the new encrypted generic-stream URLs. Avoid editing migrated camera data with an older version.</li>
+    </ul>
+    <p style="margin-top:18px;margin-bottom:0"><a class="btn secondary" href="https://github.com/rvenes/Fjoscam/blob/main/docs/release-1.0.8.md">Read the full 1.0.8 release notes</a></p>
+  </section>
+
+  <section>
+    <h2>Key features</h2>
+    <ul class="feature-list">
+      <li><span class="good">Easy PTZ control</span><br>Move cameras with buttons, video click/hold, arrow keys, WASD or numpad.</li>
+      <li><span class="good">Direct presets</span><br>Recall PTZ presets with number keys, and save or delete Reolink presets from the app.</li>
+      <li><span class="good">Fast camera switching</span><br>Use <kbd>PgUp</kbd> and <kbd>PgDn</kbd> to move between cameras.</li>
+      <li><span class="good">Fullscreen control</span><br>Press <kbd>Enter</kbd> or <kbd>F11</kbd> for fullscreen. Keyboard controls still work.</li>
+      <li><span class="good">Audio support</span><br>Reolink and UniFi/generic RTSP audio works, with volume and mute controls.</li>
+      <li><span class="good">Local setup</span><br>Camera configuration is stored locally. Passwords and generic stream URLs are encrypted with Electron safeStorage.</li>
+      <li><span class="good">Windows and macOS</span><br>Downloads are available for Windows, Mac Apple Silicon and Mac Intel.</li>
+    </ul>
+  </section>
+
+  <div class="grid">
+    <section class="card">
+      <h2>Supported camera types</h2>
+      <h3>Reolink LAN cameras</h3>
+      <ul>
+        <li>Tested with RLC-523WA, RLC-823A and TrackMix WiFi.</li>
+        <li>Uses Reolink HTTP API for login, PTZ, presets, zoom, focus, lights and siren where supported.</li>
+        <li>Uses RTSP through go2rtc for video.</li>
+        <li>Reolink video and audio works through the MSE-based go2rtc player.</li>
+      </ul>
+      <h3 style="margin-top:18px">UniFi Protect / generic RTSP</h3>
+      <ul>
+        <li>Tested with UniFi Protect RTSP/RTSPS shared links.</li>
+        <li>Video and audio works through go2rtc/WebRTC/RTC.</li>
+        <li>No PTZ or presets for generic streams.</li>
+      </ul>
+      <h3 style="margin-top:18px">Panasonic legacy MJPEG</h3>
+      <ul>
+        <li>Tested with an older Panasonic MJPEG camera.</li>
+        <li>Supports MJPEG video and Panasonic CGI pan/tilt/zoom/focus/presets.</li>
+        <li>No audio.</li>
+      </ul>
+    </section>
+
+    <section class="card">
+      <h2>Keyboard shortcuts</h2>
+      <ul>
+        <li><kbd>Enter</kbd> / <kbd>Numpad Enter</kbd> / <kbd>F11</kbd>: fullscreen</li>
+        <li><kbd>Esc</kbd>: exit fullscreen</li>
+        <li><kbd>PgUp</kbd> / <kbd>PgDn</kbd>: switch camera</li>
+        <li><kbd>WASD</kbd>, arrow keys or numpad: PTZ movement</li>
+        <li><kbd>Numpad 5</kbd>: stop PTZ movement</li>
+        <li><kbd>Numpad +</kbd> / <kbd>Numpad -</kbd>: PTZ speed</li>
+        <li><kbd>Numpad *</kbd> / <kbd>Numpad /</kbd>: optical zoom in/out</li>
+        <li><kbd>Numpad .</kbd>: mute/unmute active stream</li>
+        <li><kbd>1</kbd> to <kbd>9</kbd>: go to PTZ preset</li>
+        <li><kbd>F1</kbd>: open tips</li>
+      </ul>
+    </section>
+  </div>
+
+  <div class="grid">
+    <section class="card">
+      <h2>Streaming and audio</h2>
+      <ul>
+        <li><strong>MSE:</strong> used for Reolink video and audio when it gives the best result.</li>
+        <li><strong>RTC/WebRTC:</strong> used especially for UniFi and generic RTSP/RTSPS streams.</li>
+        <li><strong>MJPEG:</strong> used for legacy Panasonic cameras.</li>
+        <li>Volume slider and mute/unmute work per active stream.</li>
+        <li>Audio errors should not stop video playback.</li>
+      </ul>
+    </section>
+
+    <section class="card">
+      <h2>Camera management</h2>
+      <ul>
+        <li>Add, edit and delete cameras.</li>
+        <li>Reolink LAN discovery / subnet scan.</li>
+        <li>Already added cameras are marked in the discovery list.</li>
+        <li>Edit mode keeps the normal UI cleaner.</li>
+        <li>Responsive add camera dialog for smaller windows.</li>
+      </ul>
+    </section>
+  </div>
+
+  <section>
+    <h2>Connection and privacy</h2>
+    <p>
+      Fjoscam is built for local use. Use it on your LAN, or through a trusted VPN such as Tailscale for remote access. Reolink UID/P2P access is not supported.
+    </p>
+    <ul>
+      <li>Camera setup is stored locally on the PC.</li>
+      <li>Passwords and generic stream URLs are encrypted with Electron safeStorage.</li>
+      <li>go2rtc and the snapshot server are intended to run locally.</li>
+      <li>External links are limited to known HTTPS domains.</li>
+      <li>Logs try to mask sensitive tokens, credentials and query values.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>Updates and source code</h2>
+    <p>
+      Fjoscam uses a Windows NSIS installer and macOS builds. The update feed is hosted at <code>venes.org/fjoscam</code>. Release files include <code>latest.yml</code>, <code>latest-mac.yml</code>, installers/archives and matching <code>.blockmap</code> files.
+    </p>
+    <p>
+      The source code is available on GitHub and released under the MIT license.
+    </p>
+    <p><a class="btn secondary" href="https://github.com/rvenes/Fjoscam">Open Fjoscam on GitHub</a></p>
+  </section>
+
+  <section>
+    <h2>What Fjoscam does not do yet</h2>
+    <p>
+      Playback of recordings stored on the camera is not implemented yet. For camera recordings, firmware updates, UID/P2P access and some advanced camera settings, the official camera apps may still be needed.
+    </p>
+  </section>
+
+  <footer>
+    Fjoscam is an independent open source project. It is not an official Reolink, UniFi or Panasonic app.
+  </footer>
+</main>
+
+<script>
+function yamlValue(text, key){
+  const match = text.match(new RegExp('^' + key + ':\\s*(.+)$', 'm'));
+  return match ? match[1].trim().replace(/^'|'$/g,'') : '';
+}
+
+function firstYamlUrl(text){
+  const match = text.match(/^\s*-\s+url:\s*(.+)$/m);
+  return match ? match[1].trim().replace(/^'|'$/g,'') : '';
+}
+
+async function loadWindows(){
+  const btn = document.getElementById('download-windows');
+  try{
+    const response = await fetch('latest.yml',{cache:'no-store'});
+    if(!response.ok) throw new Error('Could not load latest.yml');
+
+    const text = await response.text();
+    const version = yamlValue(text,'version');
+    const fileUrl = yamlValue(text,'path') || firstYamlUrl(text);
+    if(!fileUrl) throw new Error('No Windows installer found');
+
+    btn.href = encodeURI(fileUrl);
+    btn.textContent = version ? 'Download Windows ' + version : 'Download Windows';
+    btn.classList.remove('disabled');
+  }catch(e){
+    btn.textContent = 'Windows download unavailable';
+    console.error(e);
+  }
+}
+
+async function loadMac(){
+  const armBtn = document.getElementById('download-mac-arm64');
+  const intelBtn = document.getElementById('download-mac-intel');
+
+  try{
+    const response = await fetch('latest-mac.yml',{cache:'no-store'});
+    if(!response.ok) throw new Error('Could not load latest-mac.yml');
+
+    const text = await response.text();
+    const version = yamlValue(text,'version');
+    if(!version) throw new Error('No Mac version found');
+
+    const armFile = 'Fjoscam-' + version + '-arm64.dmg';
+    const intelFile = 'Fjoscam-' + version + '.dmg';
+
+    armBtn.href = encodeURI(armFile);
+    armBtn.textContent = 'Download Mac Apple Silicon ' + version;
+    armBtn.classList.remove('disabled');
+
+    intelBtn.href = encodeURI(intelFile);
+    intelBtn.textContent = 'Download Mac Intel ' + version;
+    intelBtn.classList.remove('disabled');
+  }catch(e){
+    armBtn.textContent = 'Mac Apple Silicon unavailable';
+    intelBtn.textContent = 'Mac Intel unavailable';
+    console.error(e);
+  }
+}
+
+loadWindows();
+loadMac();
+</script>
+</body>
+</html>
