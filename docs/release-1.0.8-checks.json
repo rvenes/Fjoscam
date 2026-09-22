@@ -1,0 +1,235 @@
+{
+  "version": "1.0.8",
+  "sourceCommit": "5e14a0311497b99c81377b988a84f4050bb7ea88",
+  "date": "2026-09-22",
+  "node": "22.23.2",
+  "npm": "10.9.8",
+  "lockSha256": "ea538a053eaa393316b9e00aa32fbd145f6f3c39a4e5630515bee1697452da4f",
+  "tests": {
+    "windows": 527,
+    "macArm64": 527
+  },
+  "packagedSmoke": {
+    "windows": [
+      "app",
+      "tls",
+      "playback"
+    ],
+    "mac": [
+      "arm64/app",
+      "arm64/tls",
+      "arm64/playback",
+      "x64/app",
+      "x64/tls",
+      "x64/playback"
+    ],
+    "result": "PASS"
+  },
+  "windowsSignature": "NotSigned",
+  "macSignature": "Apple Development; strict signature and identity verification passed",
+  "notarized": false,
+  "macDmgChecks": [
+    {
+      "arch": "arm64",
+      "modules": 34,
+      "notices": 48,
+      "productionEntryPoint": true,
+      "signature": "PASS",
+      "dmgVerified": true,
+      "mountedReadOnly": true,
+      "isolatedCopyVerified": true
+    },
+    {
+      "arch": "x64",
+      "modules": 34,
+      "notices": 48,
+      "productionEntryPoint": true,
+      "signature": "PASS",
+      "dmgVerified": true,
+      "mountedReadOnly": true,
+      "isolatedCopyVerified": true
+    }
+  ],
+  "feeds": "Generated versions, file sizes and SHA-512 values match release artifacts",
+  "transfer": "Syncthing READY + SHA-256 manifest; receiver hashes, exclusive reads, count and sizes stable over at least 11 seconds",
+  "files": [
+    {
+      "name": "latest.yml",
+      "bytes": 343,
+      "sha256": "524315ca0fb2b911b5c124bb63ed88a9f6781730e0740e1db42f5361eb88dbed"
+    },
+    {
+      "name": "Fjoscam Setup 1.0.8.exe",
+      "bytes": 112040453,
+      "sha256": "8059c0db3ea56cca38784ffe8ba35d8d05a7ea94aa77b648062d4beeb8c21b18"
+    },
+    {
+      "name": "Fjoscam Setup 1.0.8.exe.blockmap",
+      "bytes": 119088,
+      "sha256": "63999aba392b9a6a2ca46d1bb51a87ecfb808c611b2119ec8a189d331ddbba71"
+    },
+    {
+      "name": "latest-mac.yml",
+      "bytes": 799,
+      "sha256": "b4fadd989a632f5d7aa124bc84baf38e9187237835ce0e3e0f4f8b24b72a9afb"
+    },
+    {
+      "name": "Fjoscam-1.0.8.dmg",
+      "bytes": 138932992,
+      "sha256": "3f9c7d2c881fa6d09e97b205a9e59017f851175dbf1b176607963e8648806967"
+    },
+    {
+      "name": "Fjoscam-1.0.8.dmg.blockmap",
+      "bytes": 147263,
+      "sha256": "5877abeefc74dd12c94908c3a456f8c0ea0edd8d67e89b79f05eee0b64cee6b1"
+    },
+    {
+      "name": "Fjoscam-1.0.8-mac.zip",
+      "bytes": 138734248,
+      "sha256": "be782dc7feea942897f45fc635b56355154ea50b90cbf2bf69bcee4b4baaaebc"
+    },
+    {
+      "name": "Fjoscam-1.0.8-mac.zip.blockmap",
+      "bytes": 147449,
+      "sha256": "156abfd3b096e3e13311630418d23ca9fddc13d10a6d6b5e661a4faf256625ae"
+    },
+    {
+      "name": "Fjoscam-1.0.8-arm64.dmg",
+      "bytes": 131073058,
+      "sha256": "f76371ec49778298513bada910c1ea7d20a47e9caec0c084acc72a8647b0d06b"
+    },
+    {
+      "name": "Fjoscam-1.0.8-arm64.dmg.blockmap",
+      "bytes": 138226,
+      "sha256": "79370437404f6418de0de839bfcc0afac5585ef7fe556ca29b6e86cf09ddbc4b"
+    },
+    {
+      "name": "Fjoscam-1.0.8-arm64-mac.zip",
+      "bytes": 130785671,
+      "sha256": "a32bed39b1d4a8a7ff805cf1131f23c3e2f653519d4ca6b969333e8e13e4e91b"
+    },
+    {
+      "name": "Fjoscam-1.0.8-arm64-mac.zip.blockmap",
+      "bytes": 138000,
+      "sha256": "ac19c0c817daed6549ed824943beebfa0e6ad4d4c71cd31fa970598227b499aa"
+    }
+  ],
+  "limits": [
+    "Mac Intel execution used Rosetta, not physical Intel hardware",
+    "Synthetic local cameras; no new physical-camera field regression",
+    "No real native updater installation/restart test",
+    "No Apple notarization, stapling or Gatekeeper acceptance claim"
+  ],
+  "publication": {
+    "result": "PASS",
+    "preview": {
+      "added": 10,
+      "updated": 3,
+      "deleted": 0,
+      "foldersChecked": 8,
+      "unchangedFolders": 7,
+      "exitCode": 0
+    },
+    "publishExitCode": 0,
+    "verification": {
+      "result": "PASS",
+      "checkedAt": "2026-09-22T07:14:31.990Z",
+      "checks": [
+        {
+          "name": "index.html",
+          "status": 200,
+          "bytes": 14985,
+          "sha256": "38ccc5a40df6e3a4fae05645092b6b399abd162785a806ce5e758c48f330d4e3",
+          "byteMatch": true
+        },
+        {
+          "name": "latest.yml",
+          "status": 200,
+          "bytes": 343,
+          "sha256": "524315ca0fb2b911b5c124bb63ed88a9f6781730e0740e1db42f5361eb88dbed",
+          "byteMatch": true
+        },
+        {
+          "name": "latest-mac.yml",
+          "status": 200,
+          "bytes": 799,
+          "sha256": "b4fadd989a632f5d7aa124bc84baf38e9187237835ce0e3e0f4f8b24b72a9afb",
+          "byteMatch": true
+        },
+        {
+          "name": "latest.yml",
+          "status": 200,
+          "bytes": 343,
+          "sizeMatch": true
+        },
+        {
+          "name": "Fjoscam Setup 1.0.8.exe",
+          "status": 200,
+          "bytes": 112040453,
+          "sizeMatch": true
+        },
+        {
+          "name": "Fjoscam Setup 1.0.8.exe.blockmap",
+          "status": 200,
+          "bytes": 119088,
+          "sizeMatch": true
+        },
+        {
+          "name": "Fjoscam-1.0.8-arm64-mac.zip",
+          "status": 200,
+          "bytes": 130785671,
+          "sizeMatch": true
+        },
+        {
+          "name": "Fjoscam-1.0.8-arm64-mac.zip.blockmap",
+          "status": 200,
+          "bytes": 138000,
+          "sizeMatch": true
+        },
+        {
+          "name": "Fjoscam-1.0.8-arm64.dmg",
+          "status": 200,
+          "bytes": 131073058,
+          "sizeMatch": true
+        },
+        {
+          "name": "Fjoscam-1.0.8-arm64.dmg.blockmap",
+          "status": 200,
+          "bytes": 138226,
+          "sizeMatch": true
+        },
+        {
+          "name": "Fjoscam-1.0.8-mac.zip",
+          "status": 200,
+          "bytes": 138734248,
+          "sizeMatch": true
+        },
+        {
+          "name": "Fjoscam-1.0.8-mac.zip.blockmap",
+          "status": 200,
+          "bytes": 147449,
+          "sizeMatch": true
+        },
+        {
+          "name": "Fjoscam-1.0.8.dmg",
+          "status": 200,
+          "bytes": 138932992,
+          "sizeMatch": true
+        },
+        {
+          "name": "Fjoscam-1.0.8.dmg.blockmap",
+          "status": 200,
+          "bytes": 147263,
+          "sizeMatch": true
+        },
+        {
+          "name": "latest-mac.yml",
+          "status": 200,
+          "bytes": 799,
+          "sizeMatch": true
+        }
+      ]
+    },
+    "browser": "Live 1.0.8 release notes and all three platform download buttons verified"
+  }
+}

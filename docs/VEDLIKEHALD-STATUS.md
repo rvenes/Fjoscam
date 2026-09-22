@@ -2,6 +2,10 @@
 
 Brukaren har autorisert fortløpande feilrettingsbolkar og ber om lagring undervegs. Mac-testing via passordlaus SSH er bestilt. Den 22. september 2026 vart også versjon 1.0.8 for alle tre plattformer, publisering på venes.org med nye releasenotat og push til GitHub uttrykkeleg bestilt. Sjå [releaseframdrift](release-1.0.8-framdrift.md). Arbeidskopien inneheld også eldre brukarendringar; ikkje rydd dei bort.
 
+## Siste release
+
+**1.0.8 er publisert og verifisert 22. september 2026** for Windows x64, Mac Intel og Mac Apple Silicon på venes.org. Nettsida har nye releasenotat. Releasekjelde `5e14a03` og nettsidekjelde er pusha til GitHub; sjå [releaseframdrift](release-1.0.8-framdrift.md) og [filinventar/testomfang](release-1.0.8-checks.json). Alle 527 testar består på Windows og Mac arm64; alle ni isolerte pakkesjekkar består på dei tre måla. Mac-appane er Apple Development-signerte, ikkje notariserte. Alle tolv offentlege releasefiler svarar med korrekt storleik; nettsida og begge feedane er byteidentiske med staging. Rein preview, exitkode 0, ingen slettingar.
+
 ## Siste verifiserte kode
 
 **Siste bolk:** [native plattformkontroll](utbetring-native-plattform-framdrift.md). **527 testar og bygg består også nativt på Mac arm64; alle seks signerte pakkesjekkar (app/TLS/playback for arm64 og x64/Rosetta) består.** Vanlege DMG/ZIP-testpakkar er bygde og verifiserte, inkludert skriveverna montering, isolert appkopi, signaturar og metadatahashar for begge arkitekturar. Rapportar: `out/mac-verification-20260922/native-packaged-verification.json` og `installation-verification.json`. Windows-regresjonskontroll `out/dependency-check-swrU4f/verification.json` består også. Ingen aktive testjobbar/mounts står att. Installeringsfiler ligg på Mac i `/Users/rvenes/Code/Fjoscam-verification-20260922-OnzKuH/native-installers`; manuell brukartest står att. Eksisterande Mac-prosjekt/installert app er urørte.
