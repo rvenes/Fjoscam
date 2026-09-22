@@ -1,12 +1,16 @@
 # Fjoscam – siste lagra vedlikehaldsstatus
 
-Brukaren har autorisert fortløpande feilrettingsbolkar og ber om lagring undervegs. Mac-testing via passordlaus SSH er bestilt. Den 22. september 2026 vart også versjon 1.0.8 for alle tre plattformer, publisering på venes.org med nye releasenotat og push til GitHub uttrykkeleg bestilt. Sjå [releaseframdrift](release-1.0.8-framdrift.md). Arbeidskopien inneheld også eldre brukarendringar; ikkje rydd dei bort.
+Brukaren har autorisert fortløpande feilrettingsbolkar og ber om lagring undervegs. Mac-testing via passordlaus SSH er bestilt. Den 22. september 2026 vart 1.0.8 publisert for alle tre plattformer på venes.org med nye releasenotat og push til GitHub. Deretter bestilte brukaren dei nyttige restbolkane, betre handtering av HTTPS-feilen ved kamerastyring og lansering av 1.0.9. Sjå [releaseframdrift](release-1.0.9-framdrift.md). Bevar brukarendringar og private lokale `docs/plans/`.
 
 ## Siste release
 
-**1.0.8 er publisert og verifisert 22. september 2026** for Windows x64, Mac Intel og Mac Apple Silicon på venes.org. Nettsida har nye releasenotat. Releasekjelde `5e14a03` og nettsidekjelde er pusha til GitHub; sjå [releaseframdrift](release-1.0.8-framdrift.md) og [filinventar/testomfang](release-1.0.8-checks.json). Alle 527 testar består på Windows og Mac arm64; alle ni isolerte pakkesjekkar består på dei tre måla. Mac-appane er Apple Development-signerte, ikkje notariserte. Alle tolv offentlege releasefiler svarar med korrekt storleik; nettsida og begge feedane er byteidentiske med staging. Rein preview, exitkode 0, ingen slettingar.
+**1.0.9 er publisert og verifisert 22. september 2026** for Windows x64, Mac Intel og Mac Apple Silicon på venes.org. Nettsida har nye releasenotat. Releasekjelde `173994b` og nettsidekjelde er pusha til GitHub; sjå [releaseframdrift](release-1.0.9-framdrift.md) og [filinventar/testomfang](release-1.0.9-checks.json). Alle 540 testar består på Windows og Mac arm64; alle ni isolerte pakkesjekkar består på dei tre måla. Begge Mac-DMG-ar og begge ZIP-ar er signatur-/innhaldskontrollerte. Mac-appane er Apple Development-signerte, ikkje notariserte; Windows er usignert. Alle tolv offentlege releasefiler svarar med korrekt storleik; nettsida og begge feedane er byteidentiske med staging. Rein preview, exitkode 0, ingen slettingar. Historiske releasar er bevarte.
 
 ## Siste verifiserte kode
+
+**1.0.9:** varig kameraspesifikt TLS-varsel med direkte sertifikatinspeksjon og lagre/prøv igjen; allowlist-basert lokal diagnostikk utan kameraidentitet/løyndomar; suspend/resume som stoppar helden rørsle og opnar berre tidlegare aktiv video. **540 testar / 38 filer og bygg består på Windows og Mac arm64.** Pakka app/TLS/playback består på Windows, Mac arm64 og Mac x64/Rosetta, med identisk låsfil og Node 22.23.2 / npm 10.9.8. Sjå [1.0.9-rapporten](release-1.0.9-checks.json). Kameraet frå brukaren sitt skjermbilete krev framleis uavhengig kontroll og eksplisitt godkjenning av korrekt sertifikat; ingen ekte kamerainnstilling er endra.
+
+### Historikk før 1.0.9
 
 **Siste bolk:** [native plattformkontroll](utbetring-native-plattform-framdrift.md). **527 testar og bygg består også nativt på Mac arm64; alle seks signerte pakkesjekkar (app/TLS/playback for arm64 og x64/Rosetta) består.** Vanlege DMG/ZIP-testpakkar er bygde og verifiserte, inkludert skriveverna montering, isolert appkopi, signaturar og metadatahashar for begge arkitekturar. Rapportar: `out/mac-verification-20260922/native-packaged-verification.json` og `installation-verification.json`. Windows-regresjonskontroll `out/dependency-check-swrU4f/verification.json` består også. Ingen aktive testjobbar/mounts står att. Installeringsfiler ligg på Mac i `/Users/rvenes/Code/Fjoscam-verification-20260922-OnzKuH/native-installers`; manuell brukartest står att. Eksisterande Mac-prosjekt/installert app er urørte.
 
@@ -16,6 +20,9 @@ Brukaren har autorisert fortløpande feilrettingsbolkar og ber om lagring underv
 
 | Bolk | Kontrollpunkt |
 |---|---|
+| HTTPS/RTSPS-feil og direkte sertifikatgjenoppretting | [1.0.9](release-1.0.9-framdrift.md); eigarskap, varig varsel, inspeksjon/stadfesting/lagre er regresjonstesta |
+| G01 lokal diagnostikkeksport | [1.0.9](release-1.0.9.md); eksplisitt feltliste utan kameraidentitet/løyndomar, avbryt/lagringsfeil testa |
+| R/G kvilemodus og gjenopptaking | [1.0.9](release-1.0.9.md); Stop-ordning, utdaterte hendingar og manuelt fråkopla video testa; ekte OS-søvn står att |
 | R13 XML/serviceoppdaging, namespace-validering og trygg profilavgrensing | [ONVIF-oppdaging](utbetring-onvif-oppdaging-framdrift.md) |
 | R13 avgrensa helden ONVIF-rørsle og ordna Stop | [ONVIF-rørsle](utbetring-onvif-rorsle-framdrift.md) |
 | G01/R14 bridge-status og fem avgrensa recoveryforsøk | [Bridge-helse](utbetring-bridge-helse-framdrift.md) |
@@ -50,11 +57,11 @@ Tidlegare bolkar frå tryggleik, kryptering, TLS, dependencies, kameraeigar/capa
 
 ## Neste arbeid
 
-1. [Native plattformkontroll](utbetring-native-plattform-framdrift.md) er siste verifiserte bolk. Ikkje bygg/test dei fullførte bolkane på nytt utan nye endringar. Brukaren har fått Apple Silicon-DMG klar for manuell installasjons-/kameratest; ikkje installer over brukarens eksisterande app eller endre ekte kameradata automatisk.
+1. **1.0.9 er ferdig publisert.** Ikkje bygg/test dei fullførte bolkane på nytt utan nye endringar. Brukaren kan no oppdatere frå venes.org og kontrollere HTTPS-sertifikatet gjennom den nye snarvegen. Manuell installasjons-/kameratest står att; ikkje installer over brukarens eksisterande app eller endre ekte kameradata automatisk.
 2. **T04/D07/R17 attståande plattformkontroll:** faktisk NSIS-/Mac-oppdateringsinstallasjon og apprestart, fysisk Intel og notariseringsflyt. Mac-bygg/signatur og arm64/x64-Rosetta app/TLS/playback er no testa. Den falske installatøren og DMG-kopitesten beviser ikkje Squirrel/NSIS-handoff ved oppdatering.
 3. **Kameramatrise:** fysisk Reolink High/H265, Low/H264, TrackMix/linse/PTZ, Panasonic og generic RTSPS/UniFi; offline/reconnect/sleep-wake og langvarig CPU/RAM. Ingen hardwareresultat skal konstruerast frå syntetiske testar.
 4. **Worth improving:** vidare D01/D02 berre ved konkret vedlikehaldsgevinst; meir detaljert kjeldefil-/ressursattribusjon utover Go-modulinventaret; mål E03/E04 før delt snapshotkjelde/varig metadata-cache.
-5. **Optional/future:** trygg eksport/import, identitetsverifisert IP-rebinding/multi-NIC-søk, diagnostikkeksport, språk/preferansar og multiview. Desse er ikkje innførte som del av feilrettingane.
+5. **Optional/future:** trygg eksport/import av kamerakonfigurasjon, identitetsverifisert IP-rebinding/multi-NIC-søk, språk/preferansar og multiview. Desse er ikkje innførte som del av feilrettingane. Avgrensa lokal diagnostikkeksport er innført i 1.0.9.
 
 To konkrete hovudbolkar står att: native plattform-/installasjonskontroll og fysisk kameramatrise/langtidsdrift. Dette er ikkje eit estimat som inkluderer alle valfrie framtidsfunksjonar. Det nye inventaret dekkjer modulnotisar for dei faste go2rtc-binærane; ikkje alle innebygde webressursar, kjeldefilattribusjonar eller heile appen. ONVIF NVR-/presetmapping/Media2/HTTPS er ikkje innført. Ingen native Mac-, installatør- eller kamerakontrollar skal hevdast utan faktisk utføring.
 
